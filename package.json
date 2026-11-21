@@ -61,8 +61,9 @@
     "build": "tsup",
     "css": "node scripts/gen-css.mjs",
     "test": "vitest run",
-    "check": "npm test && npm run build",
-    "prepublishOnly": "npm run check"
+    "typecheck": "tsc --noEmit --strict --target es2022 --module esnext --moduleResolution bundler --types react types/core.d.ts types/index.d.ts",
+    "check": "npm run typecheck && npm test && npm run build",
+    "prepublishOnly": "node -e \"if (!process.env.GITHUB_ACTIONS) { console.error('Publish by creating a GitHub release. The Publish workflow adds npm provenance.'); process.exit(1) }\" && npm run check"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10"

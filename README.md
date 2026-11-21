@@ -174,6 +174,16 @@ npm run build              # writes dist/
 
 `src/styles.css` is generated, so do not edit it by hand. `npm run css` reads the design system's Tailwind output in `scripts/tailwind.css`, keeps only the rules for classes used in `src`, scopes them under `.pqb` and writes the result. Run it whenever you add, remove or rename a class in a component. A class that is missing from `scripts/tailwind.css` is not styled. The script lists unknown class-like names at the end of its output. To use a newer Tailwind build, pass its path: `npm run css -- path/to/tailwind.css`. Colour names that start with `mds-` are renamed to `base-` as it reads them. Every rule matches elements inside `.pqb`, so a class on the element that carries `pqb` itself is not styled. Put layout classes on an inner element.
 
+### Releasing
+
+1. Update `version` in `package.json` and add the changes to `CHANGELOG.md`. Run `npm run css` and `npm run build` if anything changed.
+2. Commit, tag `vX.Y.Z` with the same version, and push the commit and the tag.
+3. Create a GitHub release from the tag. Mark it as a pre-release to publish under the `next` tag instead of `latest`.
+4. The Publish workflow checks the tag, runs the tests, checks `toSql` against Postgres and stages the version on npm with provenance.
+5. Approve it on npmjs.com or with `npm stage approve <id>`. Approving needs 2FA.
+
+`npm publish` from your own machine is refused on purpose, so every version comes from the workflow and carries provenance.
+
 ## License
 
 MIT
