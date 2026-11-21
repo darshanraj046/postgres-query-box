@@ -33,7 +33,9 @@ export interface PostgresQueryBoxProps {
   onPinSaved?: (saved: SavedQuery, pinned: boolean) => void
   onSaveQuery?: (draft: { name: string; query: string; pinned: boolean }) => void
   onDeleteSaved?: (saved: SavedQuery) => void
+  onUpdateSaved?: (saved: SavedQuery, changes: { name: string; query?: string; pinned?: boolean }) => void
   onSavedSearch?: (text: string) => void
+  onCreateAlert?: (query: string, ast: Ast | null) => void
   className?: string
 }
 

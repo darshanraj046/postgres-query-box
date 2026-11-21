@@ -206,6 +206,27 @@ function OpPicker({ value, type, onPick }) {
   )
 }
 
+function Options({ list, value, field, quoted, onPick, children }) {
+  return (
+    <div className="flex max-h-[280px] flex-col gap-1 overflow-y-auto no-scrollbar p-2">
+      {Object.entries(list.reduce((g, v) => ((g[/^\d{3}$/.test(v) ? v[0] + 'XX' : ''] ||= []).push(v), g), {})).map(([k, vs]) => (
+        <div key={k} className="flex flex-wrap items-center gap-1">
+          {k && <span className="w-8 shrink-0 text-interface-labels-xs-normal text-text-default-subdued">{k}</span>}
+          {vs.map((v) => {
+            const st = valueStyle(v, field)
+            return (
+              <button key={v} onMouseDown={(e) => e.preventDefault()} onClick={() => onPick(v)} style={{ ...st, outline: v === value ? '2px solid var(--color-stroke-active)' : 'none', outlineOffset: 1 }} className={`h-6 rounded px-1.5 font-mono text-code-editor-small hover:opacity-80 ${st?.background ? '' : 'bg-surface-default-underground'} ${st ? '' : 'text-text-default-regular'}`}>
+                {quoted && !st ? `"${v}"` : v}
+              </button>
+            )
+          })}
+        </div>
+      ))}
+      {children}
+    </div>
+  )
+}
+
 function ValuePick({ value, options, quoted, onPick, add, field }) {
   const btn = useRef(null)
   const [open, setOpen] = useState(false)
@@ -248,38 +269,30 @@ function ValuePick({ value, options, quoted, onPick, add, field }) {
               className="min-w-0 flex-1 bg-transparent text-interface-body-s-normal text-text-default-regular outline-none placeholder:text-text-default-disabled"
             />
           </div>
-          <div className="flex max-h-[280px] flex-col gap-1 overflow-y-auto no-scrollbar p-2">
-            {Object.entries(list.reduce((g, v) => ((g[/^\d{3}$/.test(v) ? v[0] + 'XX' : ''] ||= []).push(v), g), {})).map(([k, vs]) => (
-              <div key={k} className="flex flex-wrap items-center gap-1">
-                {k && <span className="w-8 shrink-0 text-interface-labels-xs-normal text-text-default-subdued">{k}</span>}
-                {vs.map((v) => {
-                  const st = valueStyle(v, field)
-                  return (
-                    <button key={v} onClick={() => pick(v)} style={{ ...st, outline: v === value ? '2px solid var(--color-stroke-active)' : 'none', outlineOffset: 1 }} className={`h-6 rounded px-1.5 font-mono text-code-editor-small hover:opacity-80 ${st?.background ? '' : 'bg-surface-default-underground'} ${st ? '' : 'text-text-default-regular'}`}>
-                      {quoted && !st ? `"${v}"` : v}
-                    </button>
-                  )
-                })}
-              </div>
-            ))}
+          <Options list={list} value={value} field={field} quoted={quoted} onPick={pick}>
             {!list.length && <p className="px-0.5 py-1 text-interface-body-s-light text-text-default-subdued">Enter adds “{q}”</p>}
-          </div>
+          </Options>
         </Menu>
       )}
     </span>
   )
 }
 
-function Chips({ values, onValues, placeholder, quoted, field }) {
+function Chips({ values, onValues, placeholder, quoted, field, options }) {
   const [draft, setDraft] = useState('')
+  const [open, setOpen] = useState(false)
   const ref = useRef(null)
+  const box = useRef(null)
+  const x = draft.trim().toLowerCase()
+  const list = (options || []).filter((o) => !values.includes(o) && (!x || o.toLowerCase().includes(x)))
   const add = (raw) => {
     const vals = raw.split(/[,\n]/).map((v) => v.trim().replace(/^"(.*)"$/s, '$1')).filter(Boolean)
     if (vals.length) onValues([...values, ...vals.filter((v) => !values.includes(v))])
     setDraft('')
+    setOpen(false)
   }
   return (
-    <span onClick={() => ref.current?.focus()} className="flex min-h-7 min-w-0 max-w-[420px] flex-1 cursor-text flex-wrap items-center gap-1 rounded-md border border-stroke-subsection bg-surface-default-ground px-1 py-0.5 focus-within:border-stroke-active">
+    <span ref={box} onClick={() => (ref.current?.focus(), setOpen(true))} className="flex min-h-7 min-w-0 max-w-[420px] flex-1 cursor-text flex-wrap items-center gap-1 rounded-md border border-stroke-subsection bg-surface-default-ground px-1 py-0.5 focus-within:border-stroke-active">
       {values.map((v) => (
         <span key={v} style={valueStyle(v, field) || undefined} className="flex h-5 items-center gap-1 rounded bg-surface-default-underground pl-1.5 pr-0.5 font-mono text-code-editor-small text-text-default-regular">
           {quoted && !valueStyle(v, field) ? `"${v}"` : v}
@@ -299,17 +312,23 @@ function Chips({ values, onValues, placeholder, quoted, field }) {
         ref={ref}
         value={draft}
         placeholder={values.length ? '' : `${placeholder}, then Enter`}
-        onChange={(e) => (e.target.value.includes(',') ? add(e.target.value) : setDraft(e.target.value))}
+        onFocus={() => setOpen(true)}
+        onChange={(e) => (setOpen(true), e.target.value.includes(',') ? add(e.target.value) : setDraft(e.target.value))}
         onKeyDown={(e) => {
           if (e.key === 'Enter') {
             e.preventDefault()
-            add(draft)
+            add(x && list[0] ? list[0] : draft)
           }
           if (e.key === 'Backspace' && !draft && values.length) onValues(values.slice(0, -1))
         }}
         onBlur={() => draft && add(draft)}
         className="h-5 min-w-[90px] flex-1 bg-transparent px-1 font-mono text-code-editor-small text-text-default-regular outline-none placeholder:font-sans placeholder:text-text-default-disabled"
       />
+      {open && list.length > 0 && (
+        <Menu anchor={box} width={field === 'data.response.statusCode' ? 420 : 300} onClose={() => setOpen(false)}>
+          <Options list={list} field={field} quoted={quoted} onPick={add} />
+        </Menu>
+      )}
     </span>
   )
 }
@@ -336,7 +355,7 @@ function Values({ cond, type, onChange }) {
   if (a === 'list')
     return (
       <>
-        <Chips values={cond.values} onValues={set} placeholder={placeholder} quoted={quoted} field={cond.field} />
+        <Chips values={cond.values} onValues={set} placeholder={placeholder} quoted={quoted} field={cond.field} options={catalog} />
         {catalog && <ValuePick add options={catalog.filter((v) => !cond.values.includes(v))} quoted={quoted} field={cond.field} onPick={(v) => set([...cond.values, v])} />}
       </>
     )
@@ -589,10 +608,10 @@ export default function Builder({ text, schema, onApply, onCancel }) {
           </span>
         ) : null}
         <span className="ml-auto" />
-        <button onClick={() => setShow(!show)} aria-pressed={show} className="h-6 shrink-0 rounded px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-regular hover:bg-surface-hover-l1-hover">
+        <button onClick={() => setShow(!show)} aria-pressed={show} className="h-6 shrink-0 rounded-[5px] border border-stroke-subsection bg-surface-default-ground px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-regular hover:bg-surface-hover-l1-hover">
           {show ? 'Hide query' : 'Show query'}
         </button>
-        <button onClick={onCancel} className="h-6 shrink-0 rounded px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-regular hover:bg-surface-hover-l1-hover">
+        <button onClick={onCancel} className="h-6 shrink-0 rounded-[5px] border border-stroke-subsection bg-surface-default-ground px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-regular hover:bg-surface-hover-l1-hover">
           Cancel
         </button>
         <button disabled={blocked} onClick={() => onApply(clean || '')} className="h-6 shrink-0 rounded-[5px] border border-stroke-active bg-surface-default-action px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-static hover:bg-surface-default-action-hover disabled:cursor-not-allowed disabled:opacity-50">

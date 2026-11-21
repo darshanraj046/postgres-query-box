@@ -68,7 +68,9 @@ The box also has a ref with `focus()`, `run()`, `setText(text)` and `getText()`.
 
 ## Saved queries
 
-Pass `saved` and the box shows a Queries button with a panel: search, pinned queries first, then the rest. Each action appears only when you pass its callback. The box never calls an API itself. You save, pin or delete, then pass the new list back in.
+Pass `saved` and the box shows a Queries button with a panel: search, pinned queries first, then the rest. Each action appears only when you pass its callback. The box never calls an API itself. You save, pin, edit or delete, then pass the new list back in.
+
+While the box is focused, Save and Create alert sit under the Queries button. They are enabled only when the query is valid. Save opens a "Save query as" popover with the name filled in and a pin checkbox. If the query is already saved and you pass `onUpdateSaved`, the popover updates that saved query instead.
 
 ```jsx
 <PostgresQueryBox
@@ -81,11 +83,15 @@ Pass `saved` and the box shows a Queries button with a panel: search, pinned que
   onPinSaved={(s, pinned) => api.pin(s.id, pinned).then(reload)}
   onSaveQuery={({ name, query }) => api.create(name, query).then(reload)}
   onDeleteSaved={(s) => api.remove(s.id).then(reload)}
+  onUpdateSaved={(s, changes) => api.update(s.id, changes).then(reload)}
   onSavedSearch={(text) => setSearch(text)}
+  onCreateAlert={(query) => openAlertForm(query)}
 />
 ```
 
-A saved query is `{ id, name, query, pinned }`. Clicking one loads it into the box and runs it.
+A saved query is `{ id, name, query, pinned }`. Clicking one loads it into the box and runs it. Each row also has Pin, Create alert, Edit (name and query, checked as you type, with the same fixes as the box) and Delete (asks first).
+
+`onUpdateSaved` gets `{ name, query }` from Edit and `{ name, pinned }` from the Save popover.
 
 ## The query language
 
@@ -106,9 +112,35 @@ Join conditions with `AND`, `OR` and `NOT`, and group them with brackets. `AND` 
 
 ## What the box gives you, and what it does not
 
-`onRun` hands you the query text in a tidy one-line form, plus a parsed tree (`ast`). Send the text, or build your own request from the tree.
+`onRun` hands you the query text in a tidy one-line form, plus a parsed tree (`ast`). Send the text, turn the tree into SQL with `toSql`, or build your own request from the tree.
 
-The box does not turn queries into SQL. Turning the text or tree into a Postgres filter is up to your backend.
+## Turning a query into SQL
+
+`toSql` turns the tree into a Postgres `WHERE` condition for a table that keeps each log as one JSONB document:
+
+```js
+import { parse, toSql } from 'postgres-query-box/core'
+
+const { where, count } = toSql(parse(text, schema).ast, schema)
+// where: "(NULLIF(data -> 'data' -> 'request' -> 'verb', 'null'::jsonb) = to_jsonb('GET'::text) AND ...)"
+```
+
+- Fields are read from a JSONB column called `data`.
+- `where` is one bracketed condition, ready to follow `AND` or `WHERE`. It is an empty string when the query has no conditions.
+- Values are written into the SQL as quoted literals, so `where` can be added to a statement with no extra parameters. Quotes in values are escaped. This relies on `standard_conforming_strings`, which is on by default in Postgres.
+- `?` only appears inside quoted text, so the SQL can go through JDBC and other drivers that treat `?` as a placeholder.
+- A row that does not fit a condition is left out instead of failing the whole query. For example, a text value in a number field, or something that is not an IP address in an IP field.
+
+The box checks everything Postgres would reject, so a query it accepts does not fail when it runs:
+
+- Regex follows Postgres rules. The box shows an error for patterns Postgres rejects, such as named groups `(?<name>...)`, `\p{L}`, `[^]`, repeats over 255 or patterns too large to compile. It also flags patterns Postgres reads differently from JavaScript. For example, `\b` is a backspace in Postgres, so the box offers `\y` for a word boundary.
+- Text with a hidden NUL character shows an error, because Postgres text cannot hold one. `toSql` throws if it is given one.
+- Very long numbers are passed through as typed, so they never overflow.
+- `COUNT()` cannot go into a `WHERE`, so it comes back as data for your server to apply. When the query has one, `count` holds `op` (`=`, `>`, `>=`, `<` or `<=`), `value`, `window` (the `WITHIN` window in milliseconds, 0 when there is none) and `by` (the `GROUP BY` field as a list of keys, or `null`). Without `COUNT()`, `count` is `null`. The rows a server should return are the ones in each group and window whose count passes, which is what `evaluate` does.
+
+`toSql` and `evaluate` give the same rows. `test/sqlcheck.mjs` checks this against a real Postgres, and also checks that 5,000 random regexes the box accepts all compile there. It needs `psql` on your path and the usual `PG*` connection settings, and it only creates a temporary table.
+
+Escaping makes the SQL safe for the query it was made from. A server that takes SQL text from the browser still runs whatever it is sent, so build the SQL on the server when you can.
 
 ## Using the engine on its own
 
@@ -132,11 +164,15 @@ Import `postgres-query-box/styles.css` once. Every rule is scoped under the box'
 
 ```
 npm install
-npm test         # query rules and component tests
-npm run build    # writes dist/
+npm test                   # query rules and component tests
+node test/sqlcheck.mjs     # toSql against a real Postgres
+npm run css                # regenerates src/styles.css
+npm run build              # writes dist/
 ```
 
 `test/qcheck.mjs` covers the language: every example query, every error message and its fix, and what is suggested at each step. Run the tests after changing `src/core/engine.js`. `dist/` is committed so the package can be installed straight from git, so rebuild before committing.
+
+`src/styles.css` is generated, so do not edit it by hand. `npm run css` reads the design system's Tailwind output in `scripts/tailwind.css`, keeps only the rules for classes used in `src`, scopes them under `.pqb` and writes the result. Run it whenever you add, remove or rename a class in a component. A class that is missing from `scripts/tailwind.css` is not styled. The script lists unknown class-like names at the end of its output. To use a newer Tailwind build, pass its path: `npm run css -- path/to/tailwind.css`. Colour names that start with `mds-` are renamed to `base-` as it reads them. Every rule matches elements inside `.pqb`, so a class on the element that carries `pqb` itself is not styled. Put layout classes on an inner element.
 
 ## License
 

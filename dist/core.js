@@ -15,10 +15,11 @@ import {
   parse,
   parseRange,
   schemaFromFields,
+  toSql,
   toTree,
   tokenize,
   validate
-} from "./chunk-35VS6GCS.js";
+} from "./chunk-VMCU5JEN.js";
 export {
   LATENCY,
   LAT_FIELD,
@@ -36,6 +37,7 @@ export {
   parse,
   parseRange,
   schemaFromFields,
+  toSql,
   toTree,
   tokenize,
   validate

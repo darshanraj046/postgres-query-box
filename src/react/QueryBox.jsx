@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Funnel, X, Copy, TreeStructure, TextT, Hash, ToggleLeft, Globe, Timer, Warning } from '@phosphor-icons/react'
-import { context, parse, format, TYPE_LABEL } from '../core/engine.js'
+import { context, parse, format } from '../core/engine.js'
 import Builder from './Builder.jsx'
 import { valueStyle } from './colors.js'
 
@@ -96,7 +96,7 @@ const closes = (text, pos) => {
   return n % 2 === 1
 }
 
-export default function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors, runRef, adv, setAdv, placeholder }) {
+export default function QueryBox({ text, setText, schema, onRun, tools, actions, runErrors, setRunErrors, runRef, adv, setAdv, placeholder }) {
   const ta = useRef(null)
   const pre = useRef(null)
   const list = useRef(null)
@@ -112,7 +112,8 @@ export default function QueryBox({ text, setText, schema, onRun, tools, runError
   const sugg = useMemo(() => (focus && open ? context(text, caret, schema) : null), [focus, open, text, caret, schema])
   const items = sugg?.items || []
   const parsed = useMemo(() => parse(text, schema), [text, schema])
-  const startHl = sugg?.title === 'Combine' || sugg?.title === 'Add another value' ? -1 : 0
+  const [ranged, setRanged] = useState(false)
+  const startHl = sugg?.title === 'Combine' || sugg?.title === 'Add another value' || sugg?.title?.startsWith('Regex syntax') ? -1 : 0
 
   useLayoutEffect(() => {
     setHl(startHl)
@@ -232,6 +233,10 @@ export default function QueryBox({ text, setText, schema, onRun, tools, runError
     const at = el.selectionStart
     const live = el.value
     last.current = live
+    if (e.key === ' ' && at === el.selectionEnd && live[at - 1] === ' ' && !((live.slice(0, at).match(/(?<!\\)"/g) || []).length % 2)) {
+      e.preventDefault()
+      return
+    }
     if (PAIRS[e.key] && at === el.selectionEnd && live[at] === e.key && (e.key !== '"' || closes(live, at))) {
       e.preventDefault()
       stepped.current = { pos: at + 1, c: e.key }
@@ -249,6 +254,12 @@ export default function QueryBox({ text, setText, schema, onRun, tools, runError
       e.target.value = prev
       setText(prev)
       skip(st.pos)
+      return
+    }
+    if (value.length === prev.length + 1 && value.slice(pos - 2, pos) === '. ' && value.slice(0, pos - 2) + ' ' + value.slice(pos) === prev) {
+      e.target.value = prev
+      setText(prev)
+      skip(pos - 1)
       return
     }
     const n = value.length - prev.length
@@ -270,7 +281,7 @@ export default function QueryBox({ text, setText, schema, onRun, tools, runError
   }
 
   const sync = () => setCaret(ta.current.selectionStart)
-  const showCard = !adv && focus && open && items.length > 0
+  const showCard = !adv && focus && open && !ranged && items.length > 0
   const err = visible[0]
   const showNotice = !adv && !showCard && err && (focus || runErrors)
   const fix = (s, e, t) => {
@@ -281,7 +292,6 @@ export default function QueryBox({ text, setText, schema, onRun, tools, runError
   const kfmt = (n) => (n >= 1000 ? (n / 1000).toFixed(2).replace(/\.?0+$/, '') + 'k' : n)
 
   let lastGroup = sugg?.title
-  const typeOf = sugg?.field && sugg.field.type !== 'numtext' ? TYPE_LABEL[sugg.field.type] : null
   const row = 'relative flex h-7 cursor-pointer items-center gap-2 rounded px-2'
 
   const chips = showCard && items.some((it) => !it.pin) && items.every((it) => it.pin || it.kind === 'value')
@@ -340,7 +350,7 @@ export default function QueryBox({ text, setText, schema, onRun, tools, runError
           {(it.kind === 'op' || it.kind === 'kw' || it.kind === 'fn') && (
             <>
               <span className={`shrink-0 font-mono text-code-editor-small font-semibold ${it.num ? ROLE.num : it.str ? ROLE.str : 'text-text-color-purple'}`}>{it.label}</span>
-              {it.sub && <span className="ml-auto min-w-0 truncate text-interface-body-s-normal text-text-default-regular">{it.sub}</span>}
+              {it.sub && <span className="ml-auto min-w-0 truncate text-interface-body-s-normal text-text-default-subdued">{it.sub}</span>}
             </>
           )}
           {it.kind === 'value' && (
@@ -384,6 +394,7 @@ export default function QueryBox({ text, setText, schema, onRun, tools, runError
               spellCheck={false}
               aria-label="Filter"
               placeholder={placeholder}
+              onSelect={(e) => setRanged(e.target.selectionStart !== e.target.selectionEnd)}
               onChange={onChange}
               onKeyDown={onKeyDown}
               onKeyUp={(e) => {
@@ -439,10 +450,11 @@ export default function QueryBox({ text, setText, schema, onRun, tools, runError
               <span className="whitespace-nowrap text-interface-body-s-heavy">Advanced filter</span>
             </button>
           </span>
-          {tools && (
+          {(tools || actions) && (
             <div className="flex shrink-0 self-stretch border-l border-stroke-subsection pl-1 pr-1">
-              <span className="flex min-h-[30px] items-start">
+              <span className="flex min-h-[30px] flex-col items-stretch">
                 <span className="flex min-h-[30px] items-center">{tools}</span>
+                {focus && !adv && actions}
               </span>
             </div>
           )}
@@ -461,19 +473,17 @@ export default function QueryBox({ text, setText, schema, onRun, tools, runError
         )}
         {showCard && (
           <div className="border-t border-stroke-subsection" onMouseDown={(e) => e.preventDefault()}>
-            <div className={`${grouped ? 'hidden' : 'flex'} items-center justify-between gap-3 px-3 pb-1 pt-2`}>
+            <div className={`${grouped || (chips && rowsOf[0]?.head) ? 'hidden' : 'flex'} items-center justify-between gap-3 px-3 pb-1 pt-2`}>
               <span className="min-w-0 truncate text-interface-titles-caption text-text-default-subdued">
                 {sugg.title.toUpperCase()}
-                {typeOf && <span className="normal-case text-text-color-cyan"> · {typeOf}</span>}
               </span>
-              <span className="shrink-0 text-interface-labels-xs-normal text-text-default-subtle">{sugg.kind === 'fields' ? items.filter((i) => i.type).length : items.length} {sugg.title.startsWith('Example') ? 'examples' : 'available'}</span>
             </div>
             <ul ref={list} style={{ maxHeight: 180 }} className="no-scrollbar overflow-y-auto px-1 pb-1">
               {chips
                 ? rowsOf.map((r) => (
                     <li key={r.items[0][1]}>
-                      {r.head && <p className="px-2 pb-1 pt-2 text-interface-titles-caption text-text-default-subdued">{r.head.toUpperCase()}</p>}
-                      <div className="flex flex-wrap items-center gap-1 px-2 py-0.5">
+                      {r.head && <p className="px-2 pb-1 pt-2 text-interface-titles-caption text-text-default-subdued">{(r === rowsOf[0] && r.head !== sugg.title ? `${sugg.title} / ${r.head}` : r.head).toUpperCase()}</p>}
+                      <div className="flex flex-wrap items-center gap-1 px-2 py-1">
                         {r.cls && <span className="w-8 shrink-0 text-interface-labels-xs-normal text-text-default-subdued">{r.cls}</span>}
                         {r.items.map(([it, i]) => {
                           const raw = it.label.replace(/^"(.*)"$/, '$1')
@@ -492,7 +502,6 @@ export default function QueryBox({ text, setText, schema, onRun, tools, runError
                       <li key={g.items[0][1]}>
                         <p style={{ position: 'sticky', top: 0, zIndex: 1 }} className="flex items-center justify-between gap-3 bg-surface-default-l1 px-2 pb-1 pt-2 text-interface-titles-caption text-text-default-subdued">
                           <span className="min-w-0 truncate">{(g.group ? `${sugg.title} / ${g.group}` : sugg.title).toUpperCase()}</span>
-                          <span className="shrink-0 text-interface-labels-xs-normal normal-case text-text-default-subtle">{g.items.length}</span>
                         </p>
                         <ul>{g.items.map(([it, i]) => renderRow(it, i, true))}</ul>
                       </li>
@@ -525,10 +534,10 @@ export default function QueryBox({ text, setText, schema, onRun, tools, runError
                 <div className="mt-1 flex flex-wrap items-center gap-1">
                   <span className="mr-1 text-interface-labels-xs-light text-text-default-subdued">Suggestions</span>
                   {[].concat(err.fix || []).map((f) => (
-                    <button key={f.verb + f.label} onClick={() => fix(f.s, f.e, f.text)} className="h-6 rounded border border-stroke-subsection px-2 font-mono text-interface-labels-xs-normal text-base-blue-1100 hover:bg-surface-hover-l1-hover">{f.verb || 'Use'} {f.label}</button>
+                    <button key={f.verb + f.label} onClick={() => fix(f.s, f.e, f.text)} style={{ minHeight: 24 }} className="max-w-full break-words rounded border border-stroke-subsection px-2 py-0.5 text-left font-mono text-interface-labels-xs-normal text-base-blue-1100 hover:bg-surface-hover-l1-hover">{f.verb || 'Use'} {f.label}</button>
                   ))}
                   {err.near?.map((n) => (
-                    <button key={n} onClick={() => fix(err.s, err.e, n)} className="h-6 rounded border border-stroke-subsection px-2 font-mono text-interface-labels-xs-normal text-base-blue-1100 hover:bg-surface-hover-l1-hover">{n}</button>
+                    <button key={n} onClick={() => fix(err.s, err.e, n)} style={{ minHeight: 24 }} className="max-w-full break-words rounded border border-stroke-subsection px-2 py-0.5 text-left font-mono text-interface-labels-xs-normal text-base-blue-1100 hover:bg-surface-hover-l1-hover">{n}</button>
                   ))}
                 </div>
               )}

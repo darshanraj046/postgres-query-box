@@ -73,3 +73,12 @@ export declare const OP_INFO: Record<string, string>
 export declare const METHODS: string[]
 export declare const STATUS_CODES: number[]
 export declare const TYPE_LABEL: Record<FieldType, string>
+
+export interface SqlCount {
+  op: '=' | '<' | '<=' | '>' | '>='
+  value: number
+  window: number
+  by: string[] | null
+}
+
+export declare function toSql(ast: Ast | null, schema: Schema): { where: string; count: SqlCount | null }

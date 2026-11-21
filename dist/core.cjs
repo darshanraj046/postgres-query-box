@@ -35,6 +35,7 @@ __export(core_exports, {
   parse: () => parse,
   parseRange: () => parseRange,
   schemaFromFields: () => schemaFromFields,
+  toSql: () => toSql,
   toTree: () => toTree,
   tokenize: () => tokenize,
   validate: () => validate
@@ -56,6 +57,100 @@ var CMP = /* @__PURE__ */ new Set(["<", "<=", ">", ">="]);
 var REGEX = /* @__PURE__ */ new Set(["~", "~*", "!~", "!~*"]);
 var TEXT_OPS = /* @__PURE__ */ new Set(["~", "~*", "!~", "!~*", "CONTAINS", "NOT CONTAINS"]);
 var UNIT = { s: 1e3, m: 6e4, h: 36e5, d: 864e5 };
+var pgRegex = (p) => {
+  const hex = (k, n) => [...Array(n)].every((_, j) => /[0-9a-fA-F]/.test(p[k + j] || "")) && !/[0-9a-fA-F]/.test(p[k + n] || "");
+  const open = [];
+  const closed = /* @__PURE__ */ new Set();
+  let groups = 0;
+  let cls = -1;
+  let first = 0;
+  let fixed = "";
+  let wb = false;
+  let bare = false;
+  let last = 0;
+  const size = [0];
+  const add = (w) => {
+    size[size.length - 1] += w;
+    last = w;
+  };
+  for (let i = 0; i < p.length; ) {
+    const c = p[i];
+    const d = p[i + 1];
+    if (cls < 0 && bare && (c === "*" || c === "+" || c === "?" || c === "{" && /\d/.test(d || ""))) return { msg: "Postgres cannot repeat \\y, \\m, \\A, \\Z or a lookaround" };
+    bare = false;
+    if (c === "\\") {
+      if (/[1-9]/.test(d) && !/\d/.test(p[i + 2] || "") && cls < 0 && !closed.has(+d)) return { msg: `\\${d} needs group ${d} to be closed before it` };
+      if (cls >= 0 && /\d/.test(d)) return { msg: `Inside brackets, write the character itself instead of \\${d}` };
+      if (d === "x" && !hex(i + 2, 2)) return { msg: "Write \\x with exactly two hex digits, like \\x41" };
+      if (d === "u" && !hex(i + 2, 4)) return { msg: "Write \\u with exactly four hex digits, like \\u0041" };
+      if (d === "c" && !/[A-Za-z]/.test(p[i + 2] || "")) return { msg: "Write \\c with a letter, like \\cA" };
+      if (cls >= 0 && /[dDwWsS]/.test(d) && (p[i + 2] === "-" && p[i + 3] && p[i + 3] !== "]" || p[i - 1] === "-" && i - 1 !== first)) return { msg: `A range like a-z cannot start or end with \\${d}` };
+      if ((d === "b" || d === "B") && cls < 0) {
+        wb = bare = true;
+        add(1);
+        fixed += "\\" + (d === "b" ? "y" : "Y");
+        i += 2;
+        continue;
+      }
+      if (/[A-Za-z]/.test(d) && !"dDwWsStnrfvxuc".includes(d) && !(cls < 0 ? "yYmMAZ" : "b").includes(d)) return { msg: `Postgres does not understand \\${d}. To match the letter ${d}, write ${d} without the backslash.` };
+      bare = cls < 0 && "yYmMAZ".includes(d);
+      if (cls < 0) add(1);
+      fixed += c + d;
+      i += 2;
+      continue;
+    }
+    if (cls >= 0) {
+      if (c === "[" && ":.=".includes(d || "-")) {
+        const m = p.slice(i).match(/^\[:(alnum|alpha|blank|cntrl|digit|graph|lower|print|punct|space|upper|xdigit|word):\]/);
+        if (!m) return { msg: "Inside brackets, write \\[ for a literal [" };
+        fixed += m[0];
+        i += m[0].length;
+        continue;
+      }
+      if (c === "]" && i > first) {
+        cls = -1;
+        add(1);
+      }
+    } else if (c === "[") {
+      if (d === "]" || d === "^" && p[i + 2] === "]") return { msg: "Postgres does not allow empty brackets [] or [^]" };
+      cls = i;
+      first = i + (d === "^" ? 2 : 1);
+    } else if (c === "(") {
+      size.push(0);
+      if (d !== "?") open.push(++groups);
+      else if (p[i + 2] === "<" && p[i + 3] !== "=" && p[i + 3] !== "!") return { msg: "Postgres does not support named groups like (?<name>...). Use ( ) instead." };
+      else {
+        open.push(p[i + 2] === ":" ? 0 : -1);
+        const pre = p.slice(i).match(/^\(\?(?:<[=!]|[:=!])/)[0];
+        fixed += pre;
+        i += pre.length;
+        continue;
+      }
+    } else if (c === ")") {
+      if (!open.length) return { msg: "Postgres reads this ) as having no matching (. Check where the brackets [ ] close." };
+      const g = open.pop();
+      if (g > 0) closed.add(g);
+      add(Math.max(size.pop(), 1));
+      bare = g === -1;
+    } else if (c === "{" && /\d/.test(d || "")) {
+      const m = p.slice(i).match(/^\{(\d+)(?:,(\d*))?\}/);
+      if (!m) return { msg: "Finish the repeat count, like {2} or {1,3}, or write \\{ for a literal {" };
+      if (+m[1] > 255 || +(m[2] || 0) > 255) return { msg: "Postgres allows at most 255 repeats, like {255}" };
+      const k = Math.max(+m[1], +(m[2] || 0));
+      size[size.length - 1] += last * (k - 1);
+      last *= k;
+      fixed += m[0];
+      i += m[0].length;
+      continue;
+    } else if (!"*+?".includes(c)) add(1);
+    fixed += c;
+    i++;
+  }
+  if (cls >= 0) return { msg: "Close the brackets with ]" };
+  if (size[0] > 1e4) return { msg: "This regex is too large for Postgres. Use smaller repeat counts." };
+  if (wb) return { msg: "Postgres reads \\b as a backspace. Use \\y for a word boundary and \\Y for the opposite.", fix: fixed };
+  return null;
+};
 var OP_INFO = {
   "==": "equals",
   "!=": "not equal",
@@ -80,7 +175,7 @@ var OP_INFO = {
 var TYPE_LABEL = { string: "text", number: "number", boolean: "boolean", ip: "ip", numtext: "text", latency: "ms" };
 function opsFor(f) {
   if (!f) return [];
-  if (f.type === "latency") return [">", "<", ">=", "<="];
+  if (f.type === "latency") return [">", "<", ">=", "<=", "BETWEEN"];
   if (f.type === "number") return ["==", "!=", "<", "<=", ">", ">=", "BETWEEN", "ANYONE", "NONEOF", "PRESENT", "ABSENT"];
   if (f.type === "boolean") return ["==", "!=", "PRESENT", "ABSENT"];
   if (f.type === "ip") return ["IP IN_RANGE", "IP NOT_IN_RANGE", "==", "!=", "CONTAINS", "NOT CONTAINS", "~", "~*", "!~", "!~*", "ANYONE", "NONEOF", "PRESENT", "ABSENT"];
@@ -168,7 +263,7 @@ function ipToBig(s) {
   let x = s;
   const m = s.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
   if (m) {
-    tail = v4(m[2]);
+    tail = /(^|\.)0\d/.test(m[2]) ? null : v4(m[2]);
     if (tail === null) return null;
     x = m[1] + "0:0";
   }
@@ -177,6 +272,7 @@ function ipToBig(s) {
   const a = halves[0] ? halves[0].split(":") : [];
   const b = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
   const fill = halves.length === 2 ? 8 - a.length - b.length : 0;
+  if (halves.length === 2 && fill < 1) return null;
   const parts = [...a, ...Array(fill).fill("0"), ...b];
   if (parts.length !== 8 || parts.some((p) => !/^[0-9a-fA-F]{1,4}$/.test(p))) return null;
   let n = parts.reduce((acc, p) => acc * 65536n + BigInt(parseInt(p, 16)), 0n);
@@ -187,18 +283,18 @@ function ipToBig(s) {
 function parseRange(s) {
   if (typeof s !== "string") return null;
   if (s.includes("/")) {
-    const [base, bits] = s.split("/");
+    const [base, bits, extra2] = s.split("/");
     const ip = ipToBig(base);
     const max = ip && ip.v === 4 ? 32 : 128;
-    if (!ip || !/^\d+$/.test(bits) || +bits > max) return null;
+    if (!ip || extra2 !== void 0 || !/^(0|[1-9]\d*)$/.test(bits) || +bits > max) return null;
     const host = BigInt(max - +bits);
     const lo = ip.n >> host << host;
     return { v: ip.v, lo, hi: lo + (1n << host) - 1n };
   }
-  const [a, b] = s.split("-");
+  const [a, b, extra] = s.split("-");
   const x = ipToBig(a);
   const y = ipToBig(b);
-  if (!x || !y || x.v !== y.v || x.n > y.n) return null;
+  if (!x || !y || extra !== void 0 || x.v !== y.v || x.n > y.n) return null;
   return { v: x.v, lo: x.n, hi: y.n };
 }
 var LAT_FIELD = { path: "@latency", type: "latency" };
@@ -271,7 +367,7 @@ var near = (word, schema) => {
   const hits = schema.fields.filter((f) => f.path.toLowerCase().includes(leaf) || leaf.includes(f.path.split(".").pop().toLowerCase()));
   return hits.slice(0, 4).map((f) => f.path);
 };
-var lit = (v) => typeof v === "string" ? '"' + v.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"' : String(v);
+var lit = (v) => typeof v === "string" ? '"' + v.replace(/\\(?=[\\"]|$)/g, "\\\\").replace(/"/g, '\\"') + '"' : String(v);
 function parse(src, schema) {
   const toks = tokenize(src);
   const errors = [];
@@ -288,26 +384,28 @@ function parse(src, schema) {
     var _a, _b, _c;
     return isP(peek(), "(") && ((_a = peek(1)) == null ? void 0 : _a.t) === "word" && ((_b = peek(2)) == null ? void 0 : _b.t) === "minus" && ((_c = peek(3)) == null ? void 0 : _c.t) === "word" && isP(peek(4), ")");
   };
-  const value = (allowBool = true) => {
+  const value = (allowBool = true, type) => {
     const t = peek();
     if (!t) fail(null, "Add a value");
     if (t.t === "str") {
       if (!t.closed) fail(t, "Close the quote", { at: t.e, fix: { s: t.e, e: t.e, text: '"', verb: "Add", label: '"' } });
+      if (t.v.includes("\0")) errors.push({ s: t.s, e: t.e, msg: "Remove the hidden NUL character from this text" });
       role(t, "str");
     } else if (t.t === "num") role(t, "num");
     else if (t.t === "bool" && allowBool) role(t, "bool");
-    else fail(t, `Expected a value, found ${word(t)}`);
+    else if (t.t !== "word" || type === "number" || type === "latency") fail(t, `Expected a ${type === "number" || type === "latency" ? "number" : "value"}, found ${word(t)}`);
+    else fail(t, `Expected a value, found ${word(t)}`, { fix: (type === "boolean" ? ["true", "false"] : [lit(t.raw)]).map((x) => ({ s: t.s, e: t.e, text: x, verb: "Use", label: x })) });
     p++;
     return { v: t.v, raw: t.t === "str" ? t.raw : t.t === "bool" ? String(t.v) : t.raw, tok: t };
   };
-  const list = (allowBool = true) => {
+  const list = (allowBool = true, type) => {
     const o = peek();
-    if (!isP(o, "[")) fail(o, 'Expected a list like ["a", "b"]');
+    if (!isP(o, "[")) fail(o, `Expected a list like ${type === "number" ? "[1, 2]" : type === "boolean" ? "[true, false]" : '["a", "b"]'}`, o && ["str", "num", "bool"].includes(o.t) ? { fix: { s: o.s, e: o.s, text: "[", verb: "Add", label: "[" } } : void 0);
     p++;
     const vals = [];
     if (isP(peek(), "]")) fail(peek(), "Add at least one value to the list");
     for (; ; ) {
-      vals.push(value(allowBool));
+      vals.push(value(allowBool, type));
       if (isP(peek(), ",")) {
         p++;
         continue;
@@ -375,6 +473,7 @@ function parse(src, schema) {
     const f = field === "@latency" ? LAT_FIELD : schema.byPath[field];
     const display = field === "@latency" ? "Latency" : field;
     const o = peek();
+    if (!o && !f) throw errors.pop();
     if (!o) fail(null, `Add an operator after ${display}`);
     let op;
     if (o.t === "op") {
@@ -405,28 +504,29 @@ function parse(src, schema) {
     } else fail(o, `Expected an operator after ${display}, found ${word(o)}`);
     const node = { k: "cond", field, op, s: fs };
     if (f && !opsFor(f).includes(op)) {
-      const why = f.type === "latency" ? "Latency takes >, <, >= or <=" : op.startsWith("IP") ? "IP operators work only on fields that hold IP addresses" : CMP.has(op) || op === "BETWEEN" ? `${op} needs a number field, ${display} holds ${TYPE_LABEL[f.type]}` : `${op} does not apply to ${display} (${TYPE_LABEL[f.type]})`;
-      errors.push({ s: o.s, e: (peek(-1) || o).e, msg: why });
+      const why = f.type === "latency" ? "Latency takes >, <, >=, <= or BETWEEN" : op.startsWith("IP") ? "IP operators work only on fields that hold IP addresses" : CMP.has(op) || op === "BETWEEN" ? `${op} needs a number field, ${display} holds ${TYPE_LABEL[f.type]}` : `${op} does not apply to ${display} (${TYPE_LABEL[f.type]})`;
+      const base = op.endsWith("*") && opsFor(f).includes(op.slice(0, -1)) ? op.slice(0, -1) : null;
+      errors.push({ s: o.s, e: (peek(-1) || o).e, msg: base ? `${op} does not apply to ${display}, use ${base}` : why, ...base ? { fix: { s: o.s, e: o.e, text: base, verb: "Use", label: base } } : {} });
     }
     if (op === "PRESENT" || op === "ABSENT") {
       node.e = o.e;
       return node;
     }
     if (op === "BETWEEN") {
-      const lo = value(false);
+      const lo = value(false, "number");
       const a = peek();
-      if (!isKw(a, "AND")) fail(a, "BETWEEN needs AND, like BETWEEN 200 AND 299");
+      if (!isKw(a, "AND")) fail(a, "BETWEEN needs AND, like BETWEEN 200 AND 299", (a == null ? void 0 : a.t) === "num" ? { s: lo.tok.s, e: a.e, at: lo.tok.e, fix: { s: lo.tok.e, e: lo.tok.e, text: " AND", verb: "Add", label: "AND" } } : void 0);
       role(a, "op");
       p++;
-      const hi = value(false);
+      const hi = value(false, "number");
       numFix(lo, display);
       numFix(hi, display);
-      if (Number(lo.v) > Number(hi.v)) errors.push({ s: lo.tok.s, e: hi.tok.e, msg: "The first number must be the smaller one" });
+      if (Number(lo.v) > Number(hi.v)) errors.push({ s: lo.tok.s, e: hi.tok.e, msg: "The first number must be the smaller one", fix: { s: lo.tok.s, e: hi.tok.e, text: `${hi.raw} AND ${lo.raw}`, verb: "Swap to", label: `${hi.raw} AND ${lo.raw}` } });
       Object.assign(node, { lo, hi, e: hi.tok.e });
       return node;
     }
     if (op === "ANYONE" || op === "NONEOF") {
-      const l = list();
+      const l = list(true, f == null ? void 0 : f.type);
       for (const v2 of l.vals) typeFix(f, v2, display);
       Object.assign(node, { vals: l.vals, e: l.e });
       return node;
@@ -451,13 +551,15 @@ function parse(src, schema) {
       node.vals = vals;
       return node;
     }
-    const v = value(!TEXT_OPS.has(op));
+    const v = value(!TEXT_OPS.has(op), f == null ? void 0 : f.type);
     node.val = v;
     node.e = v.tok.e;
     if (TEXT_OPS.has(op) && v.tok.t !== "str") errors.push({ s: v.tok.s, e: v.tok.e, msg: `${op} takes text in quotes`, fix: { s: v.tok.s, e: v.tok.e, text: `"${v.tok.raw}"`, label: `"${v.tok.raw}"` } });
     else if (REGEX.has(op)) {
       try {
         new RegExp(v.v);
+        const pg = pgRegex(v.v);
+        if (pg) errors.push({ s: v.tok.s, e: v.tok.e, msg: pg.msg, ...pg.fix ? { fix: { s: v.tok.s, e: v.tok.e, text: lit(pg.fix), label: lit(pg.fix) } } : {} });
       } catch (err) {
         errors.push({ s: v.tok.s, e: v.tok.e, msg: `Invalid regex: ${String(err.message).replace(/^Invalid regular expression: /, "")}` });
       }
@@ -474,7 +576,7 @@ function parse(src, schema) {
     role(peek(1), "fn");
     p += 2;
     const o = peek();
-    if (!o || o.t !== "op" || REGEX.has(o.v) || o.v === "!=") fail(o, "COUNT() takes >, <, >=, <= or ==");
+    if (!o || o.t !== "op" || REGEX.has(o.v) || o.v === "!=") fail(o, "COUNT() takes >, <, >=, <= or ==", (o == null ? void 0 : o.t) === "num" ? { fix: { s: o.s, e: o.s, text: "> ", verb: "Add", label: ">" } } : void 0);
     role(o, "op");
     p++;
     const n = peek();
@@ -486,7 +588,7 @@ function parse(src, schema) {
       role(peek(), "kw");
       p++;
       const d = peek();
-      if (d && d.t === "num") fail(d, `Add a unit: ${d.raw}s, ${d.raw}m, ${d.raw}h or ${d.raw}d`);
+      if (d && d.t === "num") fail(d, `Add a unit: ${d.raw}s, ${d.raw}m, ${d.raw}h or ${d.raw}d`, { fix: ["s", "m", "h", "d"].map((u) => ({ s: d.s, e: d.e, text: d.raw + u, verb: "Use", label: d.raw + u })) });
       if (!d || d.t !== "dur") fail(d, "WITHIN takes a window like 5m");
       role(d, "num");
       p++;
@@ -568,6 +670,15 @@ function parse(src, schema) {
       if (!err || err.msg === void 0) throw err;
       syntax = err;
       ast = null;
+      const k = toks.findIndex((t, j) => {
+        var _a;
+        return t.t === "str" && t.closed && ((_a = toks[j + 1]) == null ? void 0 : _a.t) === "word" && toks[j + 1].s === t.e && /\s(?:AND|OR|ANYONE|NONEOF|CONTAINS|BETWEEN)\s|[=!<>~[]|,\s*$|\b(?:data|metadata)\./.test(t.v);
+      });
+      if (k >= 0 && toks[k].s <= Math.max(syntax.s, syntax.e, syntax.at ?? 0)) {
+        const w = toks[k].raw.slice(1).match(/^[^\s",]*/)[0];
+        const at = toks[k].s + 1 + w.length;
+        syntax = { s: toks[k].s, e: at, at, msg: `Missing " after ${w}`, fix: { s: at, e: at, text: '"', verb: "Add", label: `" after ${w}` } };
+      }
     }
   }
   if (ast) {
@@ -802,30 +913,34 @@ function context(src, caret, schema) {
       const at = items.findIndex((x) => x.group !== "Common");
       if (match("latency") || match(LATENCY)) items.splice(at < 0 ? items.length : at, 0, { kind: "field", label: LATENCY, sub: "latency in ms", insert: LATENCY + " ", type: "latency", group: "Common", reopen: true });
       const prev = toks[toks.length - 1];
-      if (!hasCount && depth === 0 && (!prev || prev.t === "kw" && prev.v === "AND") && match("count()")) items.push({ kind: "fn", label: "COUNT()", sub: "threshold on matching calls, goes last", insert: "COUNT() ", group: "Functions", reopen: true, pin: true });
-      if (match("not")) items.push({ kind: "kw", label: "NOT", sub: "negate the next condition or group", insert: "NOT ", group: "Logic", reopen: true, pin: true });
+      if (!hasCount && depth === 0 && (!prev || prev.t === "kw" && prev.v === "AND") && match("count()")) items.push({ kind: "fn", label: "COUNT()", sub: "number of matching calls, e.g. COUNT() > 50 WITHIN 5m", insert: "COUNT() ", group: "Functions", reopen: true, pin: true });
+      if (match("not")) items.push({ kind: "kw", label: "NOT", sub: 'exclude matching calls, e.g. NOT data.request.verb == "GET"', insert: "NOT ", group: "Logic", reopen: true, pin: true });
       if (!q) items.push({ kind: "kw", label: "(", sub: "start a group", insert: "(", group: "Logic", reopen: true, pin: true });
     }
     return res("fields", st === "term" ? "Fields" : "Group by", items, { total: schema.fields.length });
   }
   if (st === "op") {
     if (!field || !field.type) return null;
-    const ops = opsFor(field).filter((o) => !q || o.toLowerCase().startsWith(q) || OP_INFO[o].includes(q));
+    const allowed = opsFor(field);
+    const ops = BUILD_OPS.flatMap(([g, list]) => list.flatMap((o) => o === "~" || o === "!~" ? [o, o + "*"] : [o]).map((o) => [o, g])).filter(([o]) => allowed.includes(o) && (!q || o.toLowerCase().startsWith(q) || OP_INFO[o].includes(q)));
     const hasValues = VALUE_FIELDS.includes(field.path);
-    const items = ops.map((o) => {
+    const after = src.slice(to);
+    const valued = /^\s*(?:"|\[|-?\d|true\b|false\b)/i.test(after);
+    const items = ops.map(([o, group]) => {
       let insert = o + " ";
       let caretAt = null;
       let reopen = false;
-      if (o === "PRESENT" || o === "ABSENT") reopen = true;
+      if (o === "PRESENT" || o === "ABSENT" || o === "BETWEEN" || CMP.has(o)) reopen = true;
       else if (o === "ANYONE" || o === "NONEOF") insert = o + " []", caretAt = insert.length - 1, reopen = hasValues || field.type === "boolean";
       else if (o.startsWith("IP")) insert = o + ' ""', caretAt = insert.length - 1, reopen = true;
       else if (o === "==" || o === "!=") {
         if (hasValues || field.type === "boolean") reopen = true;
         else if (field.type !== "number" && field.type !== "latency") insert = o + ' ""', caretAt = insert.length - 1;
-      } else if (TEXT_OPS.has(o)) insert = o + ' ""', caretAt = insert.length - 1;
-      return { kind: "op", label: o, sub: OP_INFO[o], insert, caretAt, reopen };
+      } else if (TEXT_OPS.has(o)) insert = o + ' ""', caretAt = insert.length - 1, reopen = o.includes("~");
+      if (valued) insert = o + (/^\s/.test(after) ? "" : " "), caretAt = null, reopen = false;
+      return { kind: "op", label: o, sub: OP_INFO[o], insert, caretAt, reopen, group };
     });
-    return res("ops", `Operators \xB7 ${field.path === "@latency" ? LATENCY : field.path}`, items, { field });
+    return res("ops", "Operators", items, { field });
   }
   if (st === "notc") return kws([{ kind: "op", label: "CONTAINS", sub: OP_INFO["NOT CONTAINS"], insert: 'CONTAINS ""', caretAt: 10 }], "Operators");
   if (st === "ipop") return kws(["IN_RANGE", "NOT_IN_RANGE"].map((x) => ({ kind: "op", label: x, sub: OP_INFO["IP " + x], insert: x + ' ""', caretAt: x.length + 2, reopen: true })), "Operators");
@@ -837,11 +952,38 @@ function context(src, caret, schema) {
     "data.request.port": [["0 AND 1023", "Well-known ports"], ["1024 AND 49151", "Registered ports"], ["49152 AND 65535", "Dynamic ports"], ["8000 AND 8999", "8xxx app ports"]]
   };
   const nums = (list, title) => res("ops", title, list.map(([label, sub]) => ({ kind: "op", label: String(label), sub, insert: label + " ", num: true, reopen: true })).filter((x) => !q || x.label.startsWith(q)));
+  if (st === "value" && between && (field == null ? void 0 : field.type) === "latency" && !q) return nums([["0 AND 100", "under 100 ms"], ["100 AND 500", "100 to 500 ms"], ["500 AND 1000", "500 ms to 1 s"], ["1000 AND 5000", "1 to 5 s"], ["5000 AND 10000", "5 to 10 s"]], "Example ranges \xB7 latency in ms");
   if (st === "value" && between && ranges[field == null ? void 0 : field.path]) return nums(ranges[field.path], `Example ranges \xB7 ${field.path}`);
   if ((st === "value" || st === "list") && (op == null ? void 0 : op.startsWith("IP"))) {
     const lastTok = toks[toks.length - 1];
     const lead = inList && !part && used.length && !(lastTok && lastTok.v === ",") ? ", " : "";
     return res("ops", `Example ranges \xB7 ${field == null ? void 0 : field.path}`, [["10.0.0.0/8", "Private network, 10.x.x.x"], ["172.16.0.0/12", "Private network, 172.16 to 172.31"], ["192.168.0.0/16", "Private network, 192.168.x.x"], ["127.0.0.0/8", "Loopback"], ["169.254.0.0/16", "Link-local"], ["10.0.0.1-10.0.0.50", "First to last address"]].filter(([v]) => !used.includes(v)).map(([v, sub]) => ({ kind: "op", label: `"${v}"`, sub, insert: lead + `"${v}"` + (inList ? "" : " "), str: true, reopen: true })).filter((x) => !q || x.label.includes(q)), { list: inList });
+  }
+  if (st === "value" && (op == null ? void 0 : op.includes("~")) && field) {
+    const patterns = {
+      "data.response.statusCode": [["^5\\d\\d$", "any 5XX code"], ["^4\\d\\d$", "any 4XX code"], ["^(401|403)$", "401 or 403"], ["^2", "starts with 2"]],
+      "data.request.verb": [["^(GET|HEAD)$", "GET or HEAD"], ["^P", "POST, PUT or PATCH"], ["^(POST|PUT|PATCH|DELETE)$", "any write method"]]
+    }[field.path];
+    if (patterns) return res("ops", `Example patterns \xB7 ${field.path}`, patterns.map(([v, sub]) => ({ kind: "op", label: lit(v), sub, insert: lit(v) + " ", str: true, reopen: true })).filter((x) => !q || x.label.toLowerCase().includes(q)));
+    if ((part == null ? void 0 : part.t) === "str") {
+      const syntax = [["^", "start of text"], ["$", "end of text"], [".", "any one character"], ["\\d", "a digit"], ["\\w", "a letter, digit or _"], ["\\s", "a space"], ["[abc]", "one of a, b or c", "[]", 1], ["[^abc]", "anything except a, b or c", "[^]", 2], ["a|b", "a or b", "|"], ["(ab)", "a group", "()", 1], ["*", "zero or more of the previous"], ["+", "one or more of the previous"], ["?", "previous is optional"], ["{3}", "exactly 3 of the previous", "{}", 1], ["\\.", "a literal dot"]];
+      return res("ops", `Regex syntax \xB7 ${field.path}`, syntax.map(([label, sub, ins = label, at]) => ({ kind: "op", label, sub, insert: ins, caretAt: at, from: caret, to: caret, str: true, reopen: true })));
+    }
+  }
+  const bands = {
+    "data.response.statusCode": [[100, 199, "1XX"], [200, 299, "2XX"], [300, 399, "3XX"], [400, 499, "4XX"], [500, 599, "5XX"], ""],
+    "data.request.port": [[0, 1023, "well-known"], [1024, 49151, "registered"], [49152, 65535, "dynamic"], " ports"]
+  }[field == null ? void 0 : field.path];
+  if (st === "value" && CMP.has(op) && bands && !q) {
+    const cls = bands.slice(0, -1);
+    const suf = bands[bands.length - 1];
+    const test2 = (x, t) => op === "<" ? x < t : op === "<=" ? x <= t : op === ">" ? x > t : x >= t;
+    const label = (t) => {
+      const cs = cls.filter(([lo, hi]) => test2(lo, t) && test2(hi, t)).map(([, , n]) => n);
+      return cs.length === 1 ? `${cs[0]}${suf} only` : `${cs[0]} ${cs.length === 2 ? "and" : "to"} ${cs[cs.length - 1]}${suf}`;
+    };
+    const edges = op === "<" || op === ">=" ? cls.slice(1).map(([lo]) => lo) : cls.slice(0, -1).map(([, hi]) => hi);
+    return nums(edges.map((t) => [t, label(t)]), `Example thresholds \xB7 ${field.path}`);
   }
   if (st === "value" && CMP.has(op) && (field == null ? void 0 : field.type) === "latency" && !q) return nums([[100, "100 ms"], [250, "250 ms"], [500, "500 ms"], [1e3, "1 s"], [2e3, "2 s"], [5e3, "5 s"], [1e4, "10 s"]], "Example thresholds \xB7 latency in ms");
   if (st === "value" && !between && !(op == null ? void 0 : op.startsWith("IP")) && !CMP.has(op) || st === "list") {
@@ -860,11 +1002,11 @@ function context(src, caret, schema) {
   if (st === "joiner" || st === "end") {
     const items = [];
     if (st === "joiner") {
-      items.push({ kind: "kw", label: "AND", sub: "both must match", insert: pad + "AND ", reopen: true });
-      items.push({ kind: "kw", label: "OR", sub: "either can match", insert: pad + "OR ", reopen: true });
-      items.push({ kind: "kw", label: "AND NOT", sub: "exclude the next condition", insert: pad + "AND NOT ", reopen: true });
-      if (depth > 0) items.push({ kind: "kw", label: ")", sub: "close the group", insert: ") ", trim: true, reopen: true });
-      if (!hasCount && depth === 0) items.push({ kind: "fn", label: "AND COUNT()", sub: "threshold on matching calls", insert: pad + "AND COUNT() ", reopen: true });
+      items.push({ kind: "kw", label: "AND", sub: "both must match, e.g. AND data.response.statusCode >= 500", insert: pad + "AND ", reopen: true });
+      items.push({ kind: "kw", label: "OR", sub: 'either can match, e.g. OR data.request.verb == "PUT"', insert: pad + "OR ", reopen: true });
+      items.push({ kind: "kw", label: "AND NOT", sub: 'exclude matching calls, e.g. AND NOT data.request.path CONTAINS "/health"', insert: pad + "AND NOT ", reopen: true });
+      if (depth > 0) items.push({ kind: "kw", label: ")", sub: "close the group, e.g. (A OR B) AND C", insert: ") ", trim: true, reopen: true });
+      if (!hasCount && depth === 0) items.push({ kind: "fn", label: "AND COUNT()", sub: "number of matching calls, e.g. AND COUNT() > 50 WITHIN 5m", insert: pad + "AND COUNT() ", reopen: true });
     }
     if (st === "joiner" && eq && catalog && !q) return res("kw", "Combine", [...another(eq), ...items.map((x) => ({ ...x, group: "Join conditions", pin: true }))]);
     return kws(items, "Combine");
@@ -893,6 +1035,13 @@ var unescRe = (p) => {
   }
   return out;
 };
+var BUILD_OPS = [
+  ["Equality", ["==", "!=", "ANYONE", "NONEOF"]],
+  ["Compare", ["<", "<=", ">", ">=", "BETWEEN"]],
+  ["Text", ["CONTAINS", "NOT CONTAINS", "~", "!~"]],
+  ["Existence", ["PRESENT", "ABSENT"]],
+  ["Network", ["IP IN_RANGE", "IP NOT_IN_RANGE"]]
+];
 var arity = (op) => op === "PRESENT" || op === "ABSENT" ? "none" : op === "BETWEEN" ? "two" : op === "ANYONE" || op === "NONEOF" ? "list" : op.startsWith("IP") ? "ip" : "one";
 var isComplete = (c) => {
   if (!c.field) return false;
@@ -969,6 +1118,92 @@ function fromTree(root, schema) {
   return t;
 }
 
+// src/core/sql.js
+var OCT = "(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
+var V4 = `(${OCT}\\.){3}${OCT}`;
+var H = "[0-9a-f]{1,4}";
+var V6 = [
+  `(${H}:){7}${H}`,
+  `(${H}:){1,7}:`,
+  `(${H}:){1,6}:${H}`,
+  `(${H}:){1,5}(:${H}){1,2}`,
+  `(${H}:){1,4}(:${H}){1,3}`,
+  `(${H}:){1,3}(:${H}){1,4}`,
+  `(${H}:){1,2}(:${H}){1,5}`,
+  `${H}:(:${H}){1,6}`,
+  `:((:${H}){1,7}|:)`,
+  `(${H}:){6}${V4}`,
+  `(${H}:){1,5}:${V4}`,
+  `::(${H}:){0,5}${V4}`
+];
+var IP_RE = `^(${V4}|${V6.join("|")})$`;
+var NUM_RE = "^-?\\d+(\\.\\d+)?$";
+var SQL_OP = { "==": "=", "!=": "<>", "<": "<", "<=": "<=", ">": ">", ">=": ">=" };
+var str = (s) => {
+  if (s.includes("\0")) throw new Error("Text values cannot contain a NUL character");
+  return "'" + s.replace(/'/g, "''") + "'";
+};
+function toSql(ast, schema) {
+  const segs = (field) => {
+    var _a, _b;
+    return ((_b = (_a = schema == null ? void 0 : schema.byPath) == null ? void 0 : _a[field]) == null ? void 0 : _b.segs) || field.split(".");
+  };
+  const path = (field, last2) => {
+    const s = segs(field).map(str);
+    return `data${s.slice(0, -1).map((k) => `->${k}`).join("")}${last2}${s[s.length - 1]}`;
+  };
+  const json = (field) => `NULLIF(${path(field, "->")},'null'::jsonb)`;
+  const text = (field) => path(field, "->>");
+  const num = (field) => {
+    if (field === "@latency") {
+      const a = path(LAT_A, "->");
+      const b = path(LAT_B, "->");
+      return `(CASE WHEN jsonb_typeof(${a}) = 'number' AND jsonb_typeof(${b}) = 'number' THEN (${a})::numeric - (${b})::numeric END)`;
+    }
+    const t = text(field);
+    return `(CASE WHEN ${t} ~ '${NUM_RE}' THEN (${t})::numeric END)`;
+  };
+  const numLit = (x) => /^-?\d+(\.\d+)?$/.test(x.raw) ? x.raw : String(Number(x.v));
+  const jv = (x) => `to_jsonb(${typeof x.v === "string" ? str(x.v) + "::text" : typeof x.v === "boolean" ? String(x.v) : numLit(x)})`;
+  const ipCond = (field, vals) => {
+    const t = text(field);
+    const v = `(${t})::inet`;
+    const m = `(CASE WHEN ${v}<<='::ffff:0.0.0.0/96' THEN '0.0.0.0'::inet+(${v}-'::ffff:0.0.0.0'::inet) ELSE ${v} END)`;
+    const nets = vals.filter((x) => !x.includes("-"));
+    const tests = vals.filter((x) => x.includes("-")).map((x) => `${m} BETWEEN ${str(x.split("-")[0])}::inet AND ${str(x.split("-")[1])}::inet`);
+    if (nets.length) tests.unshift(`${m}<<=ANY(ARRAY[${nets.map(str).join(",")}]::inet[])`);
+    return `(CASE WHEN ${t}~*'${IP_RE}' THEN ${tests.join(" OR ")} END)`;
+  };
+  const cond = (n) => {
+    const { field, op } = n;
+    if (op === "PRESENT") return `${text(field)} IS NOT NULL`;
+    if (op === "ABSENT") return `${text(field)} IS NULL`;
+    if (op === "BETWEEN") return `${num(field)} BETWEEN ${numLit(n.lo)} AND ${numLit(n.hi)}`;
+    if (op === "ANYONE" || op === "NONEOF") return `${json(field)} ${op === "NONEOF" ? "NOT IN" : "IN"} (${n.vals.map(jv).join(", ")})`;
+    if (op.startsWith("IP")) return `${op === "IP NOT_IN_RANGE" ? "NOT " : ""}${ipCond(field, n.vals.map((x) => x.v))}`;
+    const v = n.val.v;
+    if (op === "CONTAINS") return `strpos(${text(field)}, ${str(v)}) > 0`;
+    if (op === "NOT CONTAINS") return `strpos(${text(field)}, ${str(v)}) = 0`;
+    if (op.includes("~")) return `${text(field)} ${op} ${str(v)}`;
+    if (op === "==" || op === "!=") return `${json(field)} ${SQL_OP[op]} ${jv(n.val)}`;
+    return `${num(field)} ${SQL_OP[op]} ${numLit(n.val)}`;
+  };
+  const one = (n) => {
+    if (n.k === "cond") return cond(n);
+    if (n.k === "group") return `(${one(n.x)})`;
+    if (n.k === "not") return `NOT (${one(n.x)})`;
+    return n.items.map(one).join(` ${n.k.toUpperCase()} `);
+  };
+  if (!ast) return { where: "", count: null };
+  const items = ast.k === "and" ? ast.items : [ast];
+  const last = items[items.length - 1];
+  const c = last.k === "count" ? last : null;
+  const rest = c ? items.slice(0, -1) : items;
+  const where = rest.length ? `(${one(rest.length === 1 ? rest[0] : { k: "and", items: rest })})` : "";
+  const count = c && { op: SQL_OP[c.op], value: c.n, window: c.ms || 0, by: c.by ? segs(c.by) : null };
+  return { where, count };
+}
+
 // src/core/index.js
 var validate = (text, schema) => {
   var _a;
@@ -992,6 +1227,7 @@ var validate = (text, schema) => {
   parse,
   parseRange,
   schemaFromFields,
+  toSql,
   toTree,
   tokenize,
   validate

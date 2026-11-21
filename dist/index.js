@@ -19,13 +19,14 @@ import {
   parse,
   parseRange,
   schemaFromFields,
+  toSql,
   toTree,
   tokenize,
   validate
-} from "./chunk-35VS6GCS.js";
+} from "./chunk-VMCU5JEN.js";
 
 // src/react/PostgresQueryBox.jsx
-import { forwardRef, useImperativeHandle, useRef as useRef4, useState as useState4 } from "react";
+import { forwardRef, useEffect as useEffect4, useImperativeHandle, useRef as useRef4, useState as useState4 } from "react";
 import { BookmarksSimple, CaretDown as CaretDown2, Play } from "@phosphor-icons/react";
 
 // src/react/QueryBox.jsx
@@ -243,6 +244,18 @@ function OpPicker({ value, type, onPick }) {
     ] })
   ] });
 }
+function Options({ list, value, field, quoted, onPick, children }) {
+  return /* @__PURE__ */ jsxs("div", { className: "flex max-h-[280px] flex-col gap-1 overflow-y-auto no-scrollbar p-2", children: [
+    Object.entries(list.reduce((g, v) => ((g[/^\d{3}$/.test(v) ? v[0] + "XX" : ""] ||= []).push(v), g), {})).map(([k, vs]) => /* @__PURE__ */ jsxs("div", { className: "flex flex-wrap items-center gap-1", children: [
+      k && /* @__PURE__ */ jsx("span", { className: "w-8 shrink-0 text-interface-labels-xs-normal text-text-default-subdued", children: k }),
+      vs.map((v) => {
+        const st = valueStyle(v, field);
+        return /* @__PURE__ */ jsx("button", { onMouseDown: (e) => e.preventDefault(), onClick: () => onPick(v), style: { ...st, outline: v === value ? "2px solid var(--color-stroke-active)" : "none", outlineOffset: 1 }, className: `h-6 rounded px-1.5 font-mono text-code-editor-small hover:opacity-80 ${(st == null ? void 0 : st.background) ? "" : "bg-surface-default-underground"} ${st ? "" : "text-text-default-regular"}`, children: quoted && !st ? `"${v}"` : v }, v);
+      })
+    ] }, k)),
+    children
+  ] });
+}
 function ValuePick({ value, options, quoted, onPick, add, field }) {
   const btn = useRef(null);
   const [open, setOpen] = useState(false);
@@ -280,34 +293,30 @@ function ValuePick({ value, options, quoted, onPick, add, field }) {
           }
         )
       ] }),
-      /* @__PURE__ */ jsxs("div", { className: "flex max-h-[280px] flex-col gap-1 overflow-y-auto no-scrollbar p-2", children: [
-        Object.entries(list.reduce((g, v) => ((g[/^\d{3}$/.test(v) ? v[0] + "XX" : ""] ||= []).push(v), g), {})).map(([k, vs]) => /* @__PURE__ */ jsxs("div", { className: "flex flex-wrap items-center gap-1", children: [
-          k && /* @__PURE__ */ jsx("span", { className: "w-8 shrink-0 text-interface-labels-xs-normal text-text-default-subdued", children: k }),
-          vs.map((v) => {
-            const st = valueStyle(v, field);
-            return /* @__PURE__ */ jsx("button", { onClick: () => pick(v), style: { ...st, outline: v === value ? "2px solid var(--color-stroke-active)" : "none", outlineOffset: 1 }, className: `h-6 rounded px-1.5 font-mono text-code-editor-small hover:opacity-80 ${(st == null ? void 0 : st.background) ? "" : "bg-surface-default-underground"} ${st ? "" : "text-text-default-regular"}`, children: quoted && !st ? `"${v}"` : v }, v);
-          })
-        ] }, k)),
-        !list.length && /* @__PURE__ */ jsxs("p", { className: "px-0.5 py-1 text-interface-body-s-light text-text-default-subdued", children: [
-          "Enter adds \u201C",
-          q,
-          "\u201D"
-        ] })
-      ] })
+      /* @__PURE__ */ jsx(Options, { list, value, field, quoted, onPick: pick, children: !list.length && /* @__PURE__ */ jsxs("p", { className: "px-0.5 py-1 text-interface-body-s-light text-text-default-subdued", children: [
+        "Enter adds \u201C",
+        q,
+        "\u201D"
+      ] }) })
     ] })
   ] });
 }
-function Chips({ values, onValues, placeholder, quoted, field }) {
+function Chips({ values, onValues, placeholder, quoted, field, options }) {
   const [draft, setDraft] = useState("");
+  const [open, setOpen] = useState(false);
   const ref = useRef(null);
+  const box = useRef(null);
+  const x = draft.trim().toLowerCase();
+  const list = (options || []).filter((o) => !values.includes(o) && (!x || o.toLowerCase().includes(x)));
   const add = (raw) => {
     const vals = raw.split(/[,\n]/).map((v) => v.trim().replace(/^"(.*)"$/s, "$1")).filter(Boolean);
     if (vals.length) onValues([...values, ...vals.filter((v) => !values.includes(v))]);
     setDraft("");
+    setOpen(false);
   };
-  return /* @__PURE__ */ jsxs("span", { onClick: () => {
+  return /* @__PURE__ */ jsxs("span", { ref: box, onClick: () => {
     var _a;
-    return (_a = ref.current) == null ? void 0 : _a.focus();
+    return (_a = ref.current) == null ? void 0 : _a.focus(), setOpen(true);
   }, className: "flex min-h-7 min-w-0 max-w-[420px] flex-1 cursor-text flex-wrap items-center gap-1 rounded-md border border-stroke-subsection bg-surface-default-ground px-1 py-0.5 focus-within:border-stroke-active", children: [
     values.map((v) => /* @__PURE__ */ jsxs("span", { style: valueStyle(v, field) || void 0, className: "flex h-5 items-center gap-1 rounded bg-surface-default-underground pl-1.5 pr-0.5 font-mono text-code-editor-small text-text-default-regular", children: [
       quoted && !valueStyle(v, field) ? `"${v}"` : v,
@@ -316,7 +325,7 @@ function Chips({ values, onValues, placeholder, quoted, field }) {
         {
           onClick: (e) => {
             e.stopPropagation();
-            onValues(values.filter((x) => x !== v));
+            onValues(values.filter((x2) => x2 !== v));
           },
           "aria-label": `Remove ${v}`,
           className: "grid h-4 w-4 place-items-center rounded text-icon-subtle hover:bg-surface-hover-l1-hover",
@@ -330,18 +339,20 @@ function Chips({ values, onValues, placeholder, quoted, field }) {
         ref,
         value: draft,
         placeholder: values.length ? "" : `${placeholder}, then Enter`,
-        onChange: (e) => e.target.value.includes(",") ? add(e.target.value) : setDraft(e.target.value),
+        onFocus: () => setOpen(true),
+        onChange: (e) => (setOpen(true), e.target.value.includes(",") ? add(e.target.value) : setDraft(e.target.value)),
         onKeyDown: (e) => {
           if (e.key === "Enter") {
             e.preventDefault();
-            add(draft);
+            add(x && list[0] ? list[0] : draft);
           }
           if (e.key === "Backspace" && !draft && values.length) onValues(values.slice(0, -1));
         },
         onBlur: () => draft && add(draft),
         className: "h-5 min-w-[90px] flex-1 bg-transparent px-1 font-mono text-code-editor-small text-text-default-regular outline-none placeholder:font-sans placeholder:text-text-default-disabled"
       }
-    )
+    ),
+    open && list.length > 0 && /* @__PURE__ */ jsx(Menu, { anchor: box, width: field === "data.response.statusCode" ? 420 : 300, onClose: () => setOpen(false), children: /* @__PURE__ */ jsx(Options, { list, field, quoted, onPick: add }) })
   ] });
 }
 function Values({ cond, type, onChange }) {
@@ -363,7 +374,7 @@ function Values({ cond, type, onChange }) {
     ] });
   if (a === "list")
     return /* @__PURE__ */ jsxs(Fragment, { children: [
-      /* @__PURE__ */ jsx(Chips, { values: cond.values, onValues: set, placeholder, quoted, field: cond.field }),
+      /* @__PURE__ */ jsx(Chips, { values: cond.values, onValues: set, placeholder, quoted, field: cond.field, options: catalog }),
       catalog && /* @__PURE__ */ jsx(ValuePick, { add: true, options: catalog.filter((v) => !cond.values.includes(v)), quoted, field: cond.field, onPick: (v) => set([...cond.values, v]) })
     ] });
   if (a === "ip")
@@ -541,8 +552,8 @@ function Builder({ text, schema, onApply, onCancel }) {
         error
       ] }) : null,
       /* @__PURE__ */ jsx("span", { className: "ml-auto" }),
-      /* @__PURE__ */ jsx("button", { onClick: () => setShow(!show), "aria-pressed": show, className: "h-6 shrink-0 rounded px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-regular hover:bg-surface-hover-l1-hover", children: show ? "Hide query" : "Show query" }),
-      /* @__PURE__ */ jsx("button", { onClick: onCancel, className: "h-6 shrink-0 rounded px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-regular hover:bg-surface-hover-l1-hover", children: "Cancel" }),
+      /* @__PURE__ */ jsx("button", { onClick: () => setShow(!show), "aria-pressed": show, className: "h-6 shrink-0 rounded-[5px] border border-stroke-subsection bg-surface-default-ground px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-regular hover:bg-surface-hover-l1-hover", children: show ? "Hide query" : "Show query" }),
+      /* @__PURE__ */ jsx("button", { onClick: onCancel, className: "h-6 shrink-0 rounded-[5px] border border-stroke-subsection bg-surface-default-ground px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-regular hover:bg-surface-hover-l1-hover", children: "Cancel" }),
       /* @__PURE__ */ jsx("button", { disabled: blocked, onClick: () => onApply(clean || ""), className: "h-6 shrink-0 rounded-[5px] border border-stroke-active bg-surface-default-action px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-static hover:bg-surface-default-action-hover disabled:cursor-not-allowed disabled:opacity-50", children: "Apply & run" })
     ] })
   ] });
@@ -631,8 +642,8 @@ var closes = (text, pos) => {
   }
   return n % 2 === 1;
 };
-function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors, runRef, adv, setAdv, placeholder }) {
-  var _a, _b;
+function QueryBox({ text, setText, schema, onRun, tools, actions, runErrors, setRunErrors, runRef, adv, setAdv, placeholder }) {
+  var _a, _b, _c, _d;
   const ta = useRef2(null);
   const pre = useRef2(null);
   const list = useRef2(null);
@@ -647,7 +658,8 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
   const sugg = useMemo2(() => focus && open ? context(text, caret, schema) : null, [focus, open, text, caret, schema]);
   const items = (sugg == null ? void 0 : sugg.items) || [];
   const parsed = useMemo2(() => parse(text, schema), [text, schema]);
-  const startHl = (sugg == null ? void 0 : sugg.title) === "Combine" || (sugg == null ? void 0 : sugg.title) === "Add another value" ? -1 : 0;
+  const [ranged, setRanged] = useState2(false);
+  const startHl = (sugg == null ? void 0 : sugg.title) === "Combine" || (sugg == null ? void 0 : sugg.title) === "Add another value" || ((_a = sugg == null ? void 0 : sugg.title) == null ? void 0 : _a.startsWith("Regex syntax")) ? -1 : 0;
   useLayoutEffect(() => {
     setHl(startHl);
     if (list.current) list.current.scrollTop = 0;
@@ -754,6 +766,10 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
     const at = el.selectionStart;
     const live = el.value;
     last.current = live;
+    if (e.key === " " && at === el.selectionEnd && live[at - 1] === " " && !((live.slice(0, at).match(/(?<!\\)"/g) || []).length % 2)) {
+      e.preventDefault();
+      return;
+    }
     if (PAIRS[e.key] && at === el.selectionEnd && live[at] === e.key && (e.key !== '"' || closes(live, at))) {
       e.preventDefault();
       stepped.current = { pos: at + 1, c: e.key };
@@ -770,6 +786,12 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
       e.target.value = prev;
       setText(prev);
       skip(st.pos);
+      return;
+    }
+    if (value.length === prev.length + 1 && value.slice(pos - 2, pos) === ". " && value.slice(0, pos - 2) + " " + value.slice(pos) === prev) {
+      e.target.value = prev;
+      setText(prev);
+      skip(pos - 1);
       return;
     }
     const n = value.length - prev.length;
@@ -790,7 +812,7 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
     setOpen(true);
   };
   const sync = () => setCaret(ta.current.selectionStart);
-  const showCard = !adv && focus && open && items.length > 0;
+  const showCard = !adv && focus && open && !ranged && items.length > 0;
   const err = visible[0];
   const showNotice = !adv && !showCard && err && (focus || runErrors);
   const fix = (s, e, t) => {
@@ -800,7 +822,6 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
   const lifted = focus || showNotice || adv;
   const kfmt = (n) => n >= 1e3 ? (n / 1e3).toFixed(2).replace(/\.?0+$/, "") + "k" : n;
   let lastGroup = sugg == null ? void 0 : sugg.title;
-  const typeOf2 = (sugg == null ? void 0 : sugg.field) && sugg.field.type !== "numtext" ? TYPE_LABEL[sugg.field.type] : null;
   const row = "relative flex h-7 cursor-pointer items-center gap-2 rounded px-2";
   const chips = showCard && items.some((it) => !it.pin) && items.every((it) => it.pin || it.kind === "value");
   const rowsOf = [];
@@ -851,7 +872,7 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
         ] }),
         (it.kind === "op" || it.kind === "kw" || it.kind === "fn") && /* @__PURE__ */ jsxs2(Fragment2, { children: [
           /* @__PURE__ */ jsx2("span", { className: `shrink-0 font-mono text-code-editor-small font-semibold ${it.num ? ROLE.num : it.str ? ROLE.str : "text-text-color-purple"}`, children: it.label }),
-          it.sub && /* @__PURE__ */ jsx2("span", { className: "ml-auto min-w-0 truncate text-interface-body-s-normal text-text-default-regular", children: it.sub })
+          it.sub && /* @__PURE__ */ jsx2("span", { className: "ml-auto min-w-0 truncate text-interface-body-s-normal text-text-default-subdued", children: it.sub })
         ] }),
         it.kind === "value" && /* @__PURE__ */ jsxs2(Fragment2, { children: [
           vs ? /* @__PURE__ */ jsx2("span", { style: { ...vs, padding: vs.background ? "0 4px" : 0 }, className: "min-w-0 truncate font-mono text-code-editor-small", children: raw }) : /* @__PURE__ */ jsx2("span", { className: `min-w-0 truncate font-mono text-code-editor-small ${it.label.startsWith('"') ? ROLE.str : it.label === "true" || it.label === "false" ? ROLE.bool : ROLE.num}`, children: it.label }),
@@ -880,6 +901,7 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
             spellCheck: false,
             "aria-label": "Filter",
             placeholder,
+            onSelect: (e) => setRanged(e.target.selectionStart !== e.target.selectionEnd),
             onChange,
             onKeyDown,
             onKeyUp: (e) => {
@@ -929,7 +951,10 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
         /* @__PURE__ */ jsx2(TreeStructure, { size: 14, className: adv ? "" : "text-icon-default" }),
         /* @__PURE__ */ jsx2("span", { className: "whitespace-nowrap text-interface-body-s-heavy", children: "Advanced filter" })
       ] }) }),
-      tools && /* @__PURE__ */ jsx2("div", { className: "flex shrink-0 self-stretch border-l border-stroke-subsection pl-1 pr-1", children: /* @__PURE__ */ jsx2("span", { className: "flex min-h-[30px] items-start", children: /* @__PURE__ */ jsx2("span", { className: "flex min-h-[30px] items-center", children: tools }) }) })
+      (tools || actions) && /* @__PURE__ */ jsx2("div", { className: "flex shrink-0 self-stretch border-l border-stroke-subsection pl-1 pr-1", children: /* @__PURE__ */ jsxs2("span", { className: "flex min-h-[30px] flex-col items-stretch", children: [
+        /* @__PURE__ */ jsx2("span", { className: "flex min-h-[30px] items-center", children: tools }),
+        focus && !adv && actions
+      ] }) })
     ] }),
     adv && /* @__PURE__ */ jsx2(
       Builder,
@@ -945,23 +970,10 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
       }
     ),
     showCard && /* @__PURE__ */ jsxs2("div", { className: "border-t border-stroke-subsection", onMouseDown: (e) => e.preventDefault(), children: [
-      /* @__PURE__ */ jsxs2("div", { className: `${grouped ? "hidden" : "flex"} items-center justify-between gap-3 px-3 pb-1 pt-2`, children: [
-        /* @__PURE__ */ jsxs2("span", { className: "min-w-0 truncate text-interface-titles-caption text-text-default-subdued", children: [
-          sugg.title.toUpperCase(),
-          typeOf2 && /* @__PURE__ */ jsxs2("span", { className: "normal-case text-text-color-cyan", children: [
-            " \xB7 ",
-            typeOf2
-          ] })
-        ] }),
-        /* @__PURE__ */ jsxs2("span", { className: "shrink-0 text-interface-labels-xs-normal text-text-default-subtle", children: [
-          sugg.kind === "fields" ? items.filter((i) => i.type).length : items.length,
-          " ",
-          sugg.title.startsWith("Example") ? "examples" : "available"
-        ] })
-      ] }),
+      /* @__PURE__ */ jsx2("div", { className: `${grouped || chips && ((_b = rowsOf[0]) == null ? void 0 : _b.head) ? "hidden" : "flex"} items-center justify-between gap-3 px-3 pb-1 pt-2`, children: /* @__PURE__ */ jsx2("span", { className: "min-w-0 truncate text-interface-titles-caption text-text-default-subdued", children: sugg.title.toUpperCase() }) }),
       /* @__PURE__ */ jsx2("ul", { ref: list, style: { maxHeight: 180 }, className: "no-scrollbar overflow-y-auto px-1 pb-1", children: chips ? rowsOf.map((r) => /* @__PURE__ */ jsxs2("li", { children: [
-        r.head && /* @__PURE__ */ jsx2("p", { className: "px-2 pb-1 pt-2 text-interface-titles-caption text-text-default-subdued", children: r.head.toUpperCase() }),
-        /* @__PURE__ */ jsxs2("div", { className: "flex flex-wrap items-center gap-1 px-2 py-0.5", children: [
+        r.head && /* @__PURE__ */ jsx2("p", { className: "px-2 pb-1 pt-2 text-interface-titles-caption text-text-default-subdued", children: (r === rowsOf[0] && r.head !== sugg.title ? `${sugg.title} / ${r.head}` : r.head).toUpperCase() }),
+        /* @__PURE__ */ jsxs2("div", { className: "flex flex-wrap items-center gap-1 px-2 py-1", children: [
           r.cls && /* @__PURE__ */ jsx2("span", { className: "w-8 shrink-0 text-interface-labels-xs-normal text-text-default-subdued", children: r.cls }),
           r.items.map(([it, i]) => {
             const raw = it.label.replace(/^"(.*)"$/, "$1");
@@ -970,10 +982,7 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
           })
         ] })
       ] }, r.items[0][1])) : grouped ? groupsOf.map((g) => /* @__PURE__ */ jsxs2("li", { children: [
-        /* @__PURE__ */ jsxs2("p", { style: { position: "sticky", top: 0, zIndex: 1 }, className: "flex items-center justify-between gap-3 bg-surface-default-l1 px-2 pb-1 pt-2 text-interface-titles-caption text-text-default-subdued", children: [
-          /* @__PURE__ */ jsx2("span", { className: "min-w-0 truncate", children: (g.group ? `${sugg.title} / ${g.group}` : sugg.title).toUpperCase() }),
-          /* @__PURE__ */ jsx2("span", { className: "shrink-0 text-interface-labels-xs-normal normal-case text-text-default-subtle", children: g.items.length })
-        ] }),
+        /* @__PURE__ */ jsx2("p", { style: { position: "sticky", top: 0, zIndex: 1 }, className: "flex items-center justify-between gap-3 bg-surface-default-l1 px-2 pb-1 pt-2 text-interface-titles-caption text-text-default-subdued", children: /* @__PURE__ */ jsx2("span", { className: "min-w-0 truncate", children: (g.group ? `${sugg.title} / ${g.group}` : sugg.title).toUpperCase() }) }),
         /* @__PURE__ */ jsx2("ul", { children: g.items.map(([it, i]) => renderRow(it, i, true)) })
       ] }, g.items[0][1])) : items.map((it, i) => !it.pin && renderRow(it, i)) }),
       items.some((it) => it.pin) && /* @__PURE__ */ jsx2("ul", { className: "border-t border-stroke-subsection px-1 pb-1", children: items.map((it, i) => it.pin && renderRow(it, i)) }),
@@ -992,14 +1001,14 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
       /* @__PURE__ */ jsx2(Warning2, { size: 14, weight: "fill", className: "mt-[3px] shrink-0 text-text-color-red" }),
       /* @__PURE__ */ jsxs2("div", { className: "min-w-0 flex-1", children: [
         /* @__PURE__ */ jsx2("p", { className: "text-interface-labels-xs-normal leading-5 text-text-color-red", children: err.msg }),
-        (err.fix || ((_a = err.near) == null ? void 0 : _a.length) > 0) && /* @__PURE__ */ jsxs2("div", { className: "mt-1 flex flex-wrap items-center gap-1", children: [
+        (err.fix || ((_c = err.near) == null ? void 0 : _c.length) > 0) && /* @__PURE__ */ jsxs2("div", { className: "mt-1 flex flex-wrap items-center gap-1", children: [
           /* @__PURE__ */ jsx2("span", { className: "mr-1 text-interface-labels-xs-light text-text-default-subdued", children: "Suggestions" }),
-          [].concat(err.fix || []).map((f) => /* @__PURE__ */ jsxs2("button", { onClick: () => fix(f.s, f.e, f.text), className: "h-6 rounded border border-stroke-subsection px-2 font-mono text-interface-labels-xs-normal text-base-blue-1100 hover:bg-surface-hover-l1-hover", children: [
+          [].concat(err.fix || []).map((f) => /* @__PURE__ */ jsxs2("button", { onClick: () => fix(f.s, f.e, f.text), style: { minHeight: 24 }, className: "max-w-full break-words rounded border border-stroke-subsection px-2 py-0.5 text-left font-mono text-interface-labels-xs-normal text-base-blue-1100 hover:bg-surface-hover-l1-hover", children: [
             f.verb || "Use",
             " ",
             f.label
           ] }, f.verb + f.label)),
-          (_b = err.near) == null ? void 0 : _b.map((n) => /* @__PURE__ */ jsx2("button", { onClick: () => fix(err.s, err.e, n), className: "h-6 rounded border border-stroke-subsection px-2 font-mono text-interface-labels-xs-normal text-base-blue-1100 hover:bg-surface-hover-l1-hover", children: n }, n))
+          (_d = err.near) == null ? void 0 : _d.map((n) => /* @__PURE__ */ jsx2("button", { onClick: () => fix(err.s, err.e, n), style: { minHeight: 24 }, className: "max-w-full break-words rounded border border-stroke-subsection px-2 py-0.5 text-left font-mono text-interface-labels-xs-normal text-base-blue-1100 hover:bg-surface-hover-l1-hover", children: n }, n))
         ] }),
         visible.length > 1 && /* @__PURE__ */ jsxs2("p", { className: "mt-1 text-interface-labels-xs-light text-text-default-subdued", children: [
           "and ",
@@ -1014,11 +1023,23 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
 
 // src/react/Saved.jsx
 import { useEffect as useEffect3, useRef as useRef3, useState as useState3 } from "react";
-import { MagnifyingGlass as MagnifyingGlass2, PushPin, Trash as Trash2 } from "@phosphor-icons/react";
+import { MagnifyingGlass as MagnifyingGlass2 } from "@phosphor-icons/react";
 import { Fragment as Fragment3, jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
-function Saved({ saved, loading, schema, current, onPick, onPin, onDelete, onSave, onSearch, onClose }) {
+var ICON = { width: 13, height: 13, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true };
+var PIN = "M9 3h6l-1 6 4 4H6l4-4zM12 13v8";
+var FUNNEL = "M3 5h18l-7 8v6l-4 2v-8z";
+var BELL = "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4";
+var BOOKMARK = "M6 3h12v18l-6-4-6 4z";
+function QueryChip({ query, schema }) {
+  return /* @__PURE__ */ jsxs3("code", { style: { fontSize: 11, lineHeight: "16px", paddingTop: 1, paddingBottom: 1 }, className: "flex w-fit max-w-full items-center gap-1 rounded border border-stroke-subsection bg-surface-default-underground px-1.5 font-mono text-text-default-regular", children: [
+    /* @__PURE__ */ jsx3("svg", { ...ICON, width: 12, height: 12, className: "shrink-0 text-icon-default", children: /* @__PURE__ */ jsx3("path", { d: FUNNEL }) }),
+    /* @__PURE__ */ jsx3("span", { "data-pqb-tip": query, "data-mono": "", "data-trunc": "", className: "min-w-0 truncate", children: paint(query.replace(/\s+/g, " ").trim(), schema) })
+  ] });
+}
+function Saved({ saved, loading, schema, onPick, onPin, onDelete, onUpdate, onAlert, onSearch, onClose }) {
   const [q, setQ] = useState3("");
-  const [name, setName] = useState3("");
+  const [editing, setEditing] = useState3(null);
+  const [removing, setRemoving] = useState3(null);
   const ref = useRef3(null);
   const close = useRef3(onClose);
   close.current = onClose;
@@ -1027,59 +1048,92 @@ function Saved({ saved, loading, schema, current, onPick, onPin, onDelete, onSav
       var _a;
       return !((_a = ref.current) == null ? void 0 : _a.contains(e.target)) && !e.target.closest("[data-pqb-saved]") && close.current();
     };
-    const key = (e) => e.key === "Escape" && close.current();
     document.addEventListener("mousedown", out, true);
-    document.addEventListener("keydown", key);
-    return () => {
-      document.removeEventListener("mousedown", out, true);
-      document.removeEventListener("keydown", key);
-    };
+    return () => document.removeEventListener("mousedown", out, true);
   }, []);
   const x = q.trim().toLowerCase();
   const hit = saved.filter((s) => !x || s.name.toLowerCase().includes(x) || s.query.toLowerCase().includes(x));
-  const parsed = current.trim() ? parse(current, schema) : null;
-  const valid = parsed && !parsed.errors.length;
-  const taken = saved.some((s) => s.name === name.trim());
-  const save = () => {
-    if (!valid || !name.trim() || taken) return;
-    onSave({ name: name.trim(), query: format(parsed.ast), pinned: false });
-    setName("");
+  const err = editing && editing.query.trim() ? parse(editing.query, schema).errors[0] : null;
+  const nameTaken = editing && saved.some((s) => s.id !== editing.id && s.name === editing.name.trim());
+  const submit = () => {
+    if (!editing.name.trim() || !editing.query.trim() || err || nameTaken) return;
+    onUpdate(saved.find((s) => s.id === editing.id), { name: editing.name.trim(), query: format(parse(editing.query, schema).ast) });
+    setEditing(null);
   };
-  const section = (title, list) => list.length > 0 && /* @__PURE__ */ jsxs3(Fragment3, { children: [
-    /* @__PURE__ */ jsx3("p", { className: "px-3 pb-1 pt-2.5 text-interface-titles-caption text-text-default-subdued", children: title }),
-    list.map((s) => /* @__PURE__ */ jsxs3("div", { onClick: () => onPick(s), className: "group cursor-pointer px-3 py-1.5 hover:bg-surface-hover-l1-hover", children: [
-      /* @__PURE__ */ jsxs3("div", { className: "flex items-center gap-1.5", children: [
-        /* @__PURE__ */ jsx3("span", { className: "min-w-0 flex-1 truncate text-interface-body-s-heavy text-text-default-regular", children: s.name }),
-        onDelete && /* @__PURE__ */ jsx3(
-          "button",
-          {
-            "aria-label": "Delete",
-            "data-pqb-tip": "Delete",
-            onClick: (e) => {
-              e.stopPropagation();
-              onDelete(s);
-            },
-            className: "invisible grid h-5 w-5 shrink-0 place-items-center rounded text-icon-default hover:bg-surface-default-l2 group-hover:visible",
-            children: /* @__PURE__ */ jsx3(Trash2, { size: 12 })
-          }
-        ),
-        onPin && /* @__PURE__ */ jsx3(
-          "button",
-          {
-            "aria-label": s.pinned ? "Unpin" : "Pin",
-            "data-pqb-tip": s.pinned ? "Unpin" : "Pin",
-            onClick: (e) => {
-              e.stopPropagation();
-              onPin(s, !s.pinned);
-            },
-            className: `grid h-5 w-5 shrink-0 place-items-center rounded hover:bg-surface-default-l2 ${s.pinned ? "text-text-color-blue" : "invisible text-icon-default group-hover:visible"}`,
-            children: /* @__PURE__ */ jsx3(PushPin, { size: 12, weight: s.pinned ? "fill" : "regular" })
-          }
-        )
-      ] }),
-      /* @__PURE__ */ jsx3("p", { "data-pqb-tip": s.query, "data-mono": "", className: "mt-0.5 truncate font-mono text-interface-labels-xs-normal", children: paint(s.query.replace(/\n/g, " "), schema) })
-    ] }, s.id))
-  ] });
+  const act = "grid h-6 w-6 place-items-center rounded text-text-default-subtle hover:bg-surface-default-l1 hover:text-text-default-regular";
+  const item = (s) => removing === s.id ? /* @__PURE__ */ jsxs3("div", { onKeyDown: (e) => e.key === "Escape" && (e.stopPropagation(), setRemoving(null)), className: "flex items-center gap-1 bg-surface-hover-l1-hover px-2.5 py-1.5", children: [
+    /* @__PURE__ */ jsxs3("span", { className: "min-w-0 flex-1 truncate text-interface-body-s-heavy text-text-default-regular", children: [
+      "Delete \u201C",
+      s.name,
+      "\u201D?"
+    ] }),
+    /* @__PURE__ */ jsx3("button", { onClick: () => (onDelete(s), setRemoving(null)), className: "h-6 rounded px-2 text-interface-labels-xs-normal font-semibold text-text-color-red hover:bg-surface-default-l1", children: "Delete" }),
+    /* @__PURE__ */ jsx3("button", { autoFocus: true, onClick: () => setRemoving(null), className: "h-6 rounded border border-stroke-subsection bg-surface-default-l1 px-2 text-interface-labels-xs-normal font-semibold text-text-default-regular", children: "Cancel" })
+  ] }, s.id) : (editing == null ? void 0 : editing.id) === s.id ? /* @__PURE__ */ jsxs3(
+    "div",
+    {
+      onKeyDown: (e) => {
+        if (e.key === "Escape") e.stopPropagation(), setEditing(null);
+        else if (e.key === "Enter" && !e.shiftKey && e.target.tagName !== "BUTTON") e.preventDefault(), submit();
+      },
+      className: "flex flex-col gap-1.5 bg-surface-hover-l1-hover px-2.5 py-1.5",
+      children: [
+        /* @__PURE__ */ jsx3("input", { autoFocus: true, "aria-label": "Name", value: editing.name, onFocus: (e) => e.target.select(), onChange: (e) => setEditing({ ...editing, name: e.target.value }), className: "rounded border border-stroke-subsection bg-surface-default-l1 px-1.5 py-1 text-interface-body-s-heavy text-text-default-regular outline-none focus:border-stroke-active" }),
+        /* @__PURE__ */ jsx3("textarea", { "aria-label": "Query", rows: 3, spellCheck: false, value: editing.query, onChange: (e) => setEditing({ ...editing, query: e.target.value }), style: { fontSize: 11, lineHeight: "16px" }, className: "resize-none rounded border border-stroke-subsection bg-surface-default-l1 px-1.5 py-1 font-mono text-text-default-regular outline-none focus:border-stroke-active" }),
+        err && (() => {
+          const t = editing.query.replace(/\n/g, " ");
+          const from = Math.min(err.s, err.at ?? err.s);
+          const to = Math.max(err.e, err.at ?? err.e);
+          const lo = Math.max(0, from - 30);
+          const hi = Math.min(t.length, to + 30);
+          const fixes = [...[].concat(err.fix || []), ...(err.near || []).map((n) => ({ s: err.s, e: err.e, text: n, label: n, plain: true }))];
+          return /* @__PURE__ */ jsxs3("div", { className: "flex flex-col gap-1", children: [
+            /* @__PURE__ */ jsx3("p", { className: "text-interface-labels-xs-normal text-text-color-red", children: err.msg }),
+            /* @__PURE__ */ jsxs3("code", { style: { fontSize: 11, lineHeight: "16px" }, className: "whitespace-pre-wrap break-all rounded border border-stroke-subsection bg-surface-default-l1 px-1.5 py-0.5 font-mono text-text-default-subdued", children: [
+              lo > 0 && "\u2026",
+              t.slice(lo, from),
+              /* @__PURE__ */ jsxs3("span", { className: "rounded-sm bg-base-red-100 text-text-color-red", children: [
+                t.slice(from, err.s),
+                /* @__PURE__ */ jsx3("b", { className: "font-semibold", children: t.slice(err.s, err.e) }),
+                t.slice(err.e, to) || (from === to ? " " : "")
+              ] }),
+              t.slice(to, hi),
+              hi < t.length && "\u2026"
+            ] }),
+            fixes.length > 0 && /* @__PURE__ */ jsxs3("div", { className: "flex flex-wrap items-center gap-1", children: [
+              /* @__PURE__ */ jsx3("span", { className: "mr-1 text-interface-labels-xs-light text-text-default-subdued", children: "Suggestions" }),
+              fixes.map((f) => /* @__PURE__ */ jsx3("button", { onClick: () => setEditing({ ...editing, query: editing.query.slice(0, f.s) + f.text + editing.query.slice(f.e) }), style: { minHeight: 24 }, className: "max-w-full break-words rounded border border-stroke-subsection bg-surface-default-l1 px-2 py-0.5 text-left font-mono text-interface-labels-xs-normal text-base-blue-1100 hover:bg-surface-default-underground", children: f.plain ? f.label : `${f.verb || "Use"} ${f.label}` }, (f.verb || "") + f.label))
+            ] })
+          ] });
+        })(),
+        !err && nameTaken && /* @__PURE__ */ jsxs3("p", { className: "text-interface-labels-xs-normal text-text-color-red", children: [
+          "A saved query is already called ",
+          editing.name.trim()
+        ] }),
+        /* @__PURE__ */ jsxs3("div", { className: "flex justify-end gap-2", children: [
+          /* @__PURE__ */ jsx3("button", { onClick: () => setEditing(null), className: "h-6 rounded bg-surface-default-l1 px-2 text-interface-labels-xs-normal font-semibold text-text-default-regular hover:bg-surface-default-underground", children: "Cancel" }),
+          /* @__PURE__ */ jsx3("button", { disabled: !editing.name.trim() || !editing.query.trim() || !!err || nameTaken, onClick: submit, className: "h-6 rounded-md border border-stroke-active bg-surface-default-action px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-static hover:bg-surface-default-action-hover disabled:cursor-not-allowed disabled:opacity-50", children: "Save" })
+        ] })
+      ]
+    },
+    s.id
+  ) : /* @__PURE__ */ jsxs3("div", { className: "group flex items-start gap-2 px-2.5 py-1.5 hover:bg-surface-hover-l1-hover", children: [
+    /* @__PURE__ */ jsxs3("button", { onClick: () => onPick(s), style: { gap: 3 }, className: "flex min-w-0 flex-1 flex-col text-left", children: [
+      /* @__PURE__ */ jsx3("span", { "data-pqb-tip": s.name, "data-trunc": "", className: "max-w-full truncate text-interface-body-s-heavy text-text-default-regular", children: s.name }),
+      /* @__PURE__ */ jsx3(QueryChip, { query: s.query, schema })
+    ] }),
+    /* @__PURE__ */ jsxs3("span", { className: "grid shrink-0 self-center", children: [
+      s.pinned && /* @__PURE__ */ jsx3("svg", { ...ICON, width: 14, height: 14, role: "img", "aria-label": "Pinned", style: { gridArea: "1 / 1", justifySelf: "end", marginRight: 5 }, className: "text-text-color-blue group-hover:hidden", children: /* @__PURE__ */ jsx3("path", { d: PIN, fill: "currentColor" }) }),
+      /* @__PURE__ */ jsxs3("span", { style: { gridArea: "1 / 1" }, className: "hidden gap-0.5 group-hover:flex", children: [
+        onPin && /* @__PURE__ */ jsx3("button", { "aria-label": s.pinned ? `Unpin ${s.name}` : `Pin ${s.name}`, "data-pqb-tip": s.pinned ? "Unpin" : "Pin", onClick: () => onPin(s, !s.pinned), className: act, children: /* @__PURE__ */ jsx3("svg", { ...ICON, children: /* @__PURE__ */ jsx3("path", { d: s.pinned ? PIN + "M4 4l16 16" : PIN }) }) }),
+        onAlert && /* @__PURE__ */ jsx3("button", { "aria-label": `Create an alert from ${s.name}`, "data-pqb-tip": "Create alert", onClick: () => onAlert(s.query), className: act, children: /* @__PURE__ */ jsx3("svg", { ...ICON, children: /* @__PURE__ */ jsx3("path", { d: BELL }) }) }),
+        onUpdate && /* @__PURE__ */ jsx3("button", { "aria-label": `Edit ${s.name}`, "data-pqb-tip": "Edit", onClick: () => (setRemoving(null), setEditing({ id: s.id, name: s.name, query: s.query })), className: act, children: /* @__PURE__ */ jsx3("svg", { ...ICON, children: /* @__PURE__ */ jsx3("path", { d: "M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" }) }) }),
+        onDelete && /* @__PURE__ */ jsx3("button", { "aria-label": `Delete ${s.name}`, "data-pqb-tip": "Delete", onClick: () => (setEditing(null), setRemoving(s.id)), className: `${act} hover:text-text-color-red`, children: /* @__PURE__ */ jsx3("svg", { ...ICON, children: /* @__PURE__ */ jsx3("path", { d: "M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" }) }) })
+      ] })
+    ] })
+  ] }, s.id);
+  const pinned = hit.filter((s) => s.pinned);
+  const rest = hit.filter((s) => !s.pinned);
   return /* @__PURE__ */ jsxs3("div", { ref, className: "absolute right-0 top-9 z-50 flex w-[380px] flex-col rounded-md border border-stroke-subsection bg-surface-default-l1 shadow-e300", children: [
     /* @__PURE__ */ jsxs3("div", { className: "flex h-9 items-center gap-1.5 border-b border-stroke-subsection px-3", children: [
       /* @__PURE__ */ jsx3(MagnifyingGlass2, { size: 14, className: "shrink-0 text-icon-default" }),
@@ -1092,20 +1146,26 @@ function Saved({ saved, loading, schema, current, onPick, onPin, onDelete, onSav
             setQ(e.target.value);
             onSearch == null ? void 0 : onSearch(e.target.value);
           },
+          onKeyDown: (e) => {
+            if (e.key === "Escape") onClose();
+            else if (e.key === "Enter" && hit[0]) onPick(hit[0]);
+          },
           placeholder: "Search saved queries",
           className: "min-w-0 flex-1 bg-transparent text-interface-body-s-normal text-text-default-regular outline-none placeholder:text-text-default-disabled"
         }
       )
     ] }),
-    /* @__PURE__ */ jsxs3("div", { className: "max-h-[min(520px,70vh)] overflow-y-auto no-scrollbar pb-1", children: [
+    /* @__PURE__ */ jsxs3("div", { style: { maxHeight: "min(520px, 70vh)" }, className: "overflow-y-auto no-scrollbar py-1", children: [
       loading && /* @__PURE__ */ jsx3("p", { className: "px-3 py-3 text-interface-body-s-light text-text-default-subdued", children: "Loading saved queries" }),
-      section("PINNED", hit.filter((s) => s.pinned)),
-      section("ALL SAVED", hit.filter((s) => !s.pinned)),
-      !loading && !hit.length && /* @__PURE__ */ jsx3("p", { className: "px-3 py-3 text-interface-body-s-light text-text-default-subdued", children: saved.length ? "No saved query matches" : "No saved queries yet" })
-    ] }),
-    onSave && valid && /* @__PURE__ */ jsxs3("div", { className: "flex items-center gap-1.5 border-t border-stroke-subsection p-2", children: [
-      /* @__PURE__ */ jsx3("input", { value: name, onChange: (e) => setName(e.target.value), onKeyDown: (e) => e.key === "Enter" && save(), placeholder: "Name the current query", className: "h-7 min-w-0 flex-1 rounded-md border border-stroke-subsection bg-transparent px-2 text-interface-body-s-normal text-text-default-regular outline-none placeholder:text-text-default-disabled focus:border-stroke-active" }),
-      /* @__PURE__ */ jsx3("button", { disabled: !name.trim() || taken, onClick: save, className: "h-7 shrink-0 rounded-[5px] border border-stroke-active bg-surface-default-action px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-static hover:bg-surface-default-action-hover disabled:cursor-not-allowed disabled:opacity-50", children: "Save" })
+      pinned.length > 0 && /* @__PURE__ */ jsxs3(Fragment3, { children: [
+        /* @__PURE__ */ jsx3("p", { className: "px-2.5 pb-0.5 pt-1 text-interface-titles-caption text-text-default-subdued", children: "PINNED" }),
+        pinned.map(item)
+      ] }),
+      rest.length > 0 && /* @__PURE__ */ jsxs3("div", { className: pinned.length ? "mt-1 border-t border-stroke-subsection pt-1" : "", children: [
+        /* @__PURE__ */ jsx3("p", { className: "px-2.5 pb-0.5 pt-1 text-interface-titles-caption text-text-default-subdued", children: "ALL SAVED" }),
+        rest.map(item)
+      ] }),
+      !loading && !hit.length && /* @__PURE__ */ jsx3("p", { className: "px-3 py-5 text-center text-interface-body-s-light text-text-default-subdued", children: q ? "No saved queries match." : "No saved queries yet. Type a filter and press Save." })
     ] })
   ] });
 }
@@ -1128,7 +1188,9 @@ var PostgresQueryBox = forwardRef(function PostgresQueryBox2({
   onPinSaved,
   onSaveQuery,
   onDeleteSaved,
+  onUpdateSaved,
   onSavedSearch,
+  onCreateAlert,
   className = ""
 }, ref) {
   const root = useRef4(null);
@@ -1150,6 +1212,35 @@ var PostgresQueryBox = forwardRef(function PostgresQueryBox2({
     setPanelState(v);
     if (v) setAdvState(false);
   };
+  const parsed = text.trim() ? parse(text, schema) : null;
+  const valid = !!parsed && !parsed.errors.length;
+  const clean = valid ? format(parsed.ast) : "";
+  const match = onUpdateSaved && (saved == null ? void 0 : saved.find((s) => s.query === clean));
+  const [draft, setDraft] = useState4(null);
+  const popRef = useRef4(null);
+  const taken = draft && (saved == null ? void 0 : saved.some((s) => s.id !== (match == null ? void 0 : match.id) && s.name === draft.name.trim()));
+  useEffect4(() => {
+    if (!draft) return;
+    const out = (e) => {
+      var _a;
+      return !((_a = popRef.current) == null ? void 0 : _a.contains(e.target)) && setDraft(null);
+    };
+    document.addEventListener("mousedown", out);
+    return () => document.removeEventListener("mousedown", out);
+  }, [!draft]);
+  const submitDraft = () => {
+    if (!draft.name.trim() || taken) return;
+    if (match) onUpdateSaved(match, { name: draft.name.trim(), pinned: draft.pinned });
+    else onSaveQuery({ name: draft.name.trim(), query: clean, pinned: draft.pinned });
+    setDraft(null);
+  };
+  const openAlert = (q) => {
+    var _a, _b;
+    (_b = (_a = root.current) == null ? void 0 : _a.querySelector("textarea")) == null ? void 0 : _b.blur();
+    setPanel(false);
+    const p = parse(q, schema);
+    onCreateAlert(format(p.ast), p.ast);
+  };
   useImperativeHandle(ref, () => ({
     focus: () => {
       var _a, _b;
@@ -1167,9 +1258,9 @@ var PostgresQueryBox = forwardRef(function PostgresQueryBox2({
     onSelectSaved == null ? void 0 : onSelectSaved(s);
     setPanel(false);
     const p = parse(s.query, schema);
-    const clean = p.errors.length ? s.query : format(p.ast);
-    setText(clean);
-    (_a = runRef.current) == null ? void 0 : _a.call(runRef, clean);
+    const clean2 = p.errors.length ? s.query : format(p.ast);
+    setText(clean2);
+    (_a = runRef.current) == null ? void 0 : _a.call(runRef, clean2);
   };
   const extra = tools || saved ? /* @__PURE__ */ jsxs4(Fragment4, { children: [
     tools,
@@ -1180,19 +1271,63 @@ var PostgresQueryBox = forwardRef(function PostgresQueryBox2({
         /* @__PURE__ */ jsx4("span", { className: "rounded-full bg-surface-hover-l1-hover px-1.5 text-interface-labels-xxs-normal text-text-default-subdued", children: savedCount ?? saved.length }),
         /* @__PURE__ */ jsx4(CaretDown2, { size: 12, className: "shrink-0 text-text-default-subtle" })
       ] }),
-      panel && /* @__PURE__ */ jsx4(Saved, { saved, loading: savedLoading, schema, current: text, onPick: pick, onPin: onPinSaved, onDelete: onDeleteSaved, onSave: onSaveQuery, onSearch: onSavedSearch, onClose: () => setPanel(false) })
+      panel && /* @__PURE__ */ jsx4(Saved, { saved, loading: savedLoading, schema, onPick: pick, onPin: onPinSaved, onDelete: onDeleteSaved, onUpdate: onUpdateSaved, onAlert: onCreateAlert && openAlert, onSearch: onSavedSearch, onClose: () => setPanel(false) })
     ] })
   ] }) : null;
-  return /* @__PURE__ */ jsxs4("div", { ref: root, className: `pqb flex min-w-0 items-start gap-2 ${className}`, children: [
-    /* @__PURE__ */ jsx4(QueryBox, { text, setText, schema, onRun, tools: extra, runErrors, setRunErrors, runRef, adv, setAdv, placeholder }),
-    /* @__PURE__ */ jsxs4("button", { onClick: () => {
-      var _a;
-      return (_a = runRef.current) == null ? void 0 : _a.call(runRef);
-    }, className: "flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-stroke-active bg-surface-default-action px-3 hover:bg-surface-default-action-hover", children: [
-      /* @__PURE__ */ jsx4(Play, { size: 14, weight: "fill", className: "text-text-default-static" }),
-      /* @__PURE__ */ jsx4("span", { className: "whitespace-nowrap text-interface-labels-xs-normal font-semibold text-text-default-static", children: runLabel })
+  const actions = [
+    onSaveQuery && ["Save", BOOKMARK, (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      setPanel(false);
+      setDraft({ name: (match == null ? void 0 : match.name) ?? text.replace(/\b(?:data|metadata)\.[\w.-]+/g, (x) => x.split(".").pop()).replace(/\s+/g, " ").trim().slice(0, 60), pinned: !!(match == null ? void 0 : match.pinned), top: r.bottom + 6, left: Math.max(8, r.right - 280) });
+    }],
+    onCreateAlert && ["Create alert", BELL, () => openAlert(text)]
+  ].filter(Boolean);
+  return /* @__PURE__ */ jsxs4("div", { ref: root, className: `pqb ${className}`, children: [
+    /* @__PURE__ */ jsxs4("div", { className: "flex min-w-0 items-start gap-2", children: [
+      /* @__PURE__ */ jsx4(QueryBox, { text, setText, schema, onRun, tools: extra, actions: actions.length > 0 && actions.map(([label, d, go]) => /* @__PURE__ */ jsxs4("button", { disabled: !valid, onMouseDown: (e) => e.preventDefault(), onClick: go, className: "flex h-6 items-center gap-1.5 rounded px-1.5 text-left hover:bg-surface-hover-l1-hover disabled:cursor-not-allowed disabled:opacity-50", children: [
+        /* @__PURE__ */ jsx4("svg", { ...ICON, width: 14, height: 14, className: "shrink-0 text-icon-default", children: /* @__PURE__ */ jsx4("path", { d }) }),
+        /* @__PURE__ */ jsx4("span", { className: "whitespace-nowrap text-interface-body-s-normal text-text-default-regular", children: label })
+      ] }, label)), runErrors, setRunErrors, runRef, adv, setAdv, placeholder }),
+      /* @__PURE__ */ jsxs4("button", { onClick: () => {
+        var _a;
+        return (_a = runRef.current) == null ? void 0 : _a.call(runRef);
+      }, className: "flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-stroke-active bg-surface-default-action px-3 hover:bg-surface-default-action-hover", children: [
+        /* @__PURE__ */ jsx4(Play, { size: 14, weight: "fill", className: "text-text-default-static" }),
+        /* @__PURE__ */ jsx4("span", { className: "whitespace-nowrap text-interface-labels-xs-normal font-semibold text-text-default-static", children: runLabel })
+      ] })
     ] }),
-    /* @__PURE__ */ jsx4(Tips, { root })
+    /* @__PURE__ */ jsx4(Tips, { root }),
+    draft && /* @__PURE__ */ jsxs4(
+      "div",
+      {
+        ref: popRef,
+        role: "dialog",
+        "aria-label": "Save query as",
+        onKeyDown: (e) => {
+          if (e.key === "Escape") setDraft(null);
+          else if (e.key === "Enter" && e.target.tagName !== "BUTTON") e.preventDefault(), submitDraft();
+        },
+        style: { position: "fixed", top: draft.top, left: draft.left, width: 280, zIndex: 60 },
+        className: "flex flex-col gap-2 rounded-md border border-stroke-subsection bg-surface-default-l1 p-3 shadow-e300",
+        children: [
+          /* @__PURE__ */ jsx4("p", { className: "text-interface-body-s-heavy text-text-default-regular", children: "Save query as" }),
+          /* @__PURE__ */ jsx4("input", { autoFocus: true, "aria-label": "Name", value: draft.name, onFocus: (e) => e.target.select(), onChange: (e) => setDraft({ ...draft, name: e.target.value }), className: "rounded-md border border-stroke-subsection bg-surface-default-underground px-2 py-1.5 text-interface-body-s-normal font-medium text-text-default-regular outline-none focus:border-stroke-active" }),
+          /* @__PURE__ */ jsxs4("label", { className: "flex cursor-pointer items-center gap-1.5 text-interface-labels-xs-normal font-medium text-text-default-subdued", children: [
+            /* @__PURE__ */ jsx4("input", { type: "checkbox", checked: draft.pinned, onChange: (e) => setDraft({ ...draft, pinned: e.target.checked }), style: { width: 14, height: 14, margin: 0, accentColor: "var(--color-stroke-active)" } }),
+            "Pin to the top of Queries"
+          ] }),
+          /* @__PURE__ */ jsx4(QueryChip, { query: clean, schema }),
+          taken && /* @__PURE__ */ jsxs4("p", { className: "text-interface-labels-xs-normal text-text-color-red", children: [
+            "A saved query is already called ",
+            draft.name.trim()
+          ] }),
+          /* @__PURE__ */ jsxs4("div", { className: "flex justify-end gap-2", children: [
+            /* @__PURE__ */ jsx4("button", { onClick: () => setDraft(null), className: "h-6 rounded px-2 text-interface-labels-xs-normal font-semibold text-text-default-regular hover:bg-surface-hover-l1-hover", children: "Cancel" }),
+            /* @__PURE__ */ jsx4("button", { disabled: !draft.name.trim() || taken, onClick: submitDraft, className: "h-6 rounded-md border border-stroke-active bg-surface-default-action px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-static hover:bg-surface-default-action-hover disabled:cursor-not-allowed disabled:opacity-50", children: match ? "Update" : "Save" })
+          ] })
+        ]
+      }
+    )
   ] });
 });
 var PostgresQueryBox_default = PostgresQueryBox;
@@ -1214,6 +1349,7 @@ export {
   parse,
   parseRange,
   schemaFromFields,
+  toSql,
   toTree,
   tokenize,
   validate

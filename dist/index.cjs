@@ -46,6 +46,7 @@ __export(src_exports, {
   parse: () => parse,
   parseRange: () => parseRange,
   schemaFromFields: () => schemaFromFields,
+  toSql: () => toSql,
   toTree: () => toTree,
   tokenize: () => tokenize,
   validate: () => validate
@@ -71,6 +72,100 @@ var CMP = /* @__PURE__ */ new Set(["<", "<=", ">", ">="]);
 var REGEX = /* @__PURE__ */ new Set(["~", "~*", "!~", "!~*"]);
 var TEXT_OPS = /* @__PURE__ */ new Set(["~", "~*", "!~", "!~*", "CONTAINS", "NOT CONTAINS"]);
 var UNIT = { s: 1e3, m: 6e4, h: 36e5, d: 864e5 };
+var pgRegex = (p) => {
+  const hex = (k, n) => [...Array(n)].every((_, j) => /[0-9a-fA-F]/.test(p[k + j] || "")) && !/[0-9a-fA-F]/.test(p[k + n] || "");
+  const open = [];
+  const closed = /* @__PURE__ */ new Set();
+  let groups = 0;
+  let cls2 = -1;
+  let first = 0;
+  let fixed = "";
+  let wb = false;
+  let bare = false;
+  let last = 0;
+  const size = [0];
+  const add = (w) => {
+    size[size.length - 1] += w;
+    last = w;
+  };
+  for (let i = 0; i < p.length; ) {
+    const c = p[i];
+    const d = p[i + 1];
+    if (cls2 < 0 && bare && (c === "*" || c === "+" || c === "?" || c === "{" && /\d/.test(d || ""))) return { msg: "Postgres cannot repeat \\y, \\m, \\A, \\Z or a lookaround" };
+    bare = false;
+    if (c === "\\") {
+      if (/[1-9]/.test(d) && !/\d/.test(p[i + 2] || "") && cls2 < 0 && !closed.has(+d)) return { msg: `\\${d} needs group ${d} to be closed before it` };
+      if (cls2 >= 0 && /\d/.test(d)) return { msg: `Inside brackets, write the character itself instead of \\${d}` };
+      if (d === "x" && !hex(i + 2, 2)) return { msg: "Write \\x with exactly two hex digits, like \\x41" };
+      if (d === "u" && !hex(i + 2, 4)) return { msg: "Write \\u with exactly four hex digits, like \\u0041" };
+      if (d === "c" && !/[A-Za-z]/.test(p[i + 2] || "")) return { msg: "Write \\c with a letter, like \\cA" };
+      if (cls2 >= 0 && /[dDwWsS]/.test(d) && (p[i + 2] === "-" && p[i + 3] && p[i + 3] !== "]" || p[i - 1] === "-" && i - 1 !== first)) return { msg: `A range like a-z cannot start or end with \\${d}` };
+      if ((d === "b" || d === "B") && cls2 < 0) {
+        wb = bare = true;
+        add(1);
+        fixed += "\\" + (d === "b" ? "y" : "Y");
+        i += 2;
+        continue;
+      }
+      if (/[A-Za-z]/.test(d) && !"dDwWsStnrfvxuc".includes(d) && !(cls2 < 0 ? "yYmMAZ" : "b").includes(d)) return { msg: `Postgres does not understand \\${d}. To match the letter ${d}, write ${d} without the backslash.` };
+      bare = cls2 < 0 && "yYmMAZ".includes(d);
+      if (cls2 < 0) add(1);
+      fixed += c + d;
+      i += 2;
+      continue;
+    }
+    if (cls2 >= 0) {
+      if (c === "[" && ":.=".includes(d || "-")) {
+        const m = p.slice(i).match(/^\[:(alnum|alpha|blank|cntrl|digit|graph|lower|print|punct|space|upper|xdigit|word):\]/);
+        if (!m) return { msg: "Inside brackets, write \\[ for a literal [" };
+        fixed += m[0];
+        i += m[0].length;
+        continue;
+      }
+      if (c === "]" && i > first) {
+        cls2 = -1;
+        add(1);
+      }
+    } else if (c === "[") {
+      if (d === "]" || d === "^" && p[i + 2] === "]") return { msg: "Postgres does not allow empty brackets [] or [^]" };
+      cls2 = i;
+      first = i + (d === "^" ? 2 : 1);
+    } else if (c === "(") {
+      size.push(0);
+      if (d !== "?") open.push(++groups);
+      else if (p[i + 2] === "<" && p[i + 3] !== "=" && p[i + 3] !== "!") return { msg: "Postgres does not support named groups like (?<name>...). Use ( ) instead." };
+      else {
+        open.push(p[i + 2] === ":" ? 0 : -1);
+        const pre = p.slice(i).match(/^\(\?(?:<[=!]|[:=!])/)[0];
+        fixed += pre;
+        i += pre.length;
+        continue;
+      }
+    } else if (c === ")") {
+      if (!open.length) return { msg: "Postgres reads this ) as having no matching (. Check where the brackets [ ] close." };
+      const g = open.pop();
+      if (g > 0) closed.add(g);
+      add(Math.max(size.pop(), 1));
+      bare = g === -1;
+    } else if (c === "{" && /\d/.test(d || "")) {
+      const m = p.slice(i).match(/^\{(\d+)(?:,(\d*))?\}/);
+      if (!m) return { msg: "Finish the repeat count, like {2} or {1,3}, or write \\{ for a literal {" };
+      if (+m[1] > 255 || +(m[2] || 0) > 255) return { msg: "Postgres allows at most 255 repeats, like {255}" };
+      const k = Math.max(+m[1], +(m[2] || 0));
+      size[size.length - 1] += last * (k - 1);
+      last *= k;
+      fixed += m[0];
+      i += m[0].length;
+      continue;
+    } else if (!"*+?".includes(c)) add(1);
+    fixed += c;
+    i++;
+  }
+  if (cls2 >= 0) return { msg: "Close the brackets with ]" };
+  if (size[0] > 1e4) return { msg: "This regex is too large for Postgres. Use smaller repeat counts." };
+  if (wb) return { msg: "Postgres reads \\b as a backspace. Use \\y for a word boundary and \\Y for the opposite.", fix: fixed };
+  return null;
+};
 var OP_INFO = {
   "==": "equals",
   "!=": "not equal",
@@ -95,7 +190,7 @@ var OP_INFO = {
 var TYPE_LABEL = { string: "text", number: "number", boolean: "boolean", ip: "ip", numtext: "text", latency: "ms" };
 function opsFor(f) {
   if (!f) return [];
-  if (f.type === "latency") return [">", "<", ">=", "<="];
+  if (f.type === "latency") return [">", "<", ">=", "<=", "BETWEEN"];
   if (f.type === "number") return ["==", "!=", "<", "<=", ">", ">=", "BETWEEN", "ANYONE", "NONEOF", "PRESENT", "ABSENT"];
   if (f.type === "boolean") return ["==", "!=", "PRESENT", "ABSENT"];
   if (f.type === "ip") return ["IP IN_RANGE", "IP NOT_IN_RANGE", "==", "!=", "CONTAINS", "NOT CONTAINS", "~", "~*", "!~", "!~*", "ANYONE", "NONEOF", "PRESENT", "ABSENT"];
@@ -183,7 +278,7 @@ function ipToBig(s) {
   let x = s;
   const m = s.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
   if (m) {
-    tail = v4(m[2]);
+    tail = /(^|\.)0\d/.test(m[2]) ? null : v4(m[2]);
     if (tail === null) return null;
     x = m[1] + "0:0";
   }
@@ -192,6 +287,7 @@ function ipToBig(s) {
   const a = halves[0] ? halves[0].split(":") : [];
   const b = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
   const fill = halves.length === 2 ? 8 - a.length - b.length : 0;
+  if (halves.length === 2 && fill < 1) return null;
   const parts = [...a, ...Array(fill).fill("0"), ...b];
   if (parts.length !== 8 || parts.some((p) => !/^[0-9a-fA-F]{1,4}$/.test(p))) return null;
   let n = parts.reduce((acc, p) => acc * 65536n + BigInt(parseInt(p, 16)), 0n);
@@ -202,18 +298,18 @@ function ipToBig(s) {
 function parseRange(s) {
   if (typeof s !== "string") return null;
   if (s.includes("/")) {
-    const [base, bits] = s.split("/");
+    const [base, bits, extra2] = s.split("/");
     const ip = ipToBig(base);
     const max = ip && ip.v === 4 ? 32 : 128;
-    if (!ip || !/^\d+$/.test(bits) || +bits > max) return null;
+    if (!ip || extra2 !== void 0 || !/^(0|[1-9]\d*)$/.test(bits) || +bits > max) return null;
     const host = BigInt(max - +bits);
     const lo = ip.n >> host << host;
     return { v: ip.v, lo, hi: lo + (1n << host) - 1n };
   }
-  const [a, b] = s.split("-");
+  const [a, b, extra] = s.split("-");
   const x = ipToBig(a);
   const y = ipToBig(b);
-  if (!x || !y || x.v !== y.v || x.n > y.n) return null;
+  if (!x || !y || extra !== void 0 || x.v !== y.v || x.n > y.n) return null;
   return { v: x.v, lo: x.n, hi: y.n };
 }
 var LAT_FIELD = { path: "@latency", type: "latency" };
@@ -286,7 +382,7 @@ var near = (word, schema) => {
   const hits = schema.fields.filter((f) => f.path.toLowerCase().includes(leaf) || leaf.includes(f.path.split(".").pop().toLowerCase()));
   return hits.slice(0, 4).map((f) => f.path);
 };
-var lit = (v) => typeof v === "string" ? '"' + v.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"' : String(v);
+var lit = (v) => typeof v === "string" ? '"' + v.replace(/\\(?=[\\"]|$)/g, "\\\\").replace(/"/g, '\\"') + '"' : String(v);
 function parse(src, schema) {
   const toks = tokenize(src);
   const errors = [];
@@ -303,26 +399,28 @@ function parse(src, schema) {
     var _a, _b, _c;
     return isP(peek(), "(") && ((_a = peek(1)) == null ? void 0 : _a.t) === "word" && ((_b = peek(2)) == null ? void 0 : _b.t) === "minus" && ((_c = peek(3)) == null ? void 0 : _c.t) === "word" && isP(peek(4), ")");
   };
-  const value = (allowBool = true) => {
+  const value = (allowBool = true, type) => {
     const t = peek();
     if (!t) fail(null, "Add a value");
     if (t.t === "str") {
       if (!t.closed) fail(t, "Close the quote", { at: t.e, fix: { s: t.e, e: t.e, text: '"', verb: "Add", label: '"' } });
+      if (t.v.includes("\0")) errors.push({ s: t.s, e: t.e, msg: "Remove the hidden NUL character from this text" });
       role(t, "str");
     } else if (t.t === "num") role(t, "num");
     else if (t.t === "bool" && allowBool) role(t, "bool");
-    else fail(t, `Expected a value, found ${word(t)}`);
+    else if (t.t !== "word" || type === "number" || type === "latency") fail(t, `Expected a ${type === "number" || type === "latency" ? "number" : "value"}, found ${word(t)}`);
+    else fail(t, `Expected a value, found ${word(t)}`, { fix: (type === "boolean" ? ["true", "false"] : [lit(t.raw)]).map((x) => ({ s: t.s, e: t.e, text: x, verb: "Use", label: x })) });
     p++;
     return { v: t.v, raw: t.t === "str" ? t.raw : t.t === "bool" ? String(t.v) : t.raw, tok: t };
   };
-  const list = (allowBool = true) => {
+  const list = (allowBool = true, type) => {
     const o = peek();
-    if (!isP(o, "[")) fail(o, 'Expected a list like ["a", "b"]');
+    if (!isP(o, "[")) fail(o, `Expected a list like ${type === "number" ? "[1, 2]" : type === "boolean" ? "[true, false]" : '["a", "b"]'}`, o && ["str", "num", "bool"].includes(o.t) ? { fix: { s: o.s, e: o.s, text: "[", verb: "Add", label: "[" } } : void 0);
     p++;
     const vals = [];
     if (isP(peek(), "]")) fail(peek(), "Add at least one value to the list");
     for (; ; ) {
-      vals.push(value(allowBool));
+      vals.push(value(allowBool, type));
       if (isP(peek(), ",")) {
         p++;
         continue;
@@ -390,6 +488,7 @@ function parse(src, schema) {
     const f = field === "@latency" ? LAT_FIELD : schema.byPath[field];
     const display = field === "@latency" ? "Latency" : field;
     const o = peek();
+    if (!o && !f) throw errors.pop();
     if (!o) fail(null, `Add an operator after ${display}`);
     let op;
     if (o.t === "op") {
@@ -420,28 +519,29 @@ function parse(src, schema) {
     } else fail(o, `Expected an operator after ${display}, found ${word(o)}`);
     const node = { k: "cond", field, op, s: fs };
     if (f && !opsFor(f).includes(op)) {
-      const why = f.type === "latency" ? "Latency takes >, <, >= or <=" : op.startsWith("IP") ? "IP operators work only on fields that hold IP addresses" : CMP.has(op) || op === "BETWEEN" ? `${op} needs a number field, ${display} holds ${TYPE_LABEL[f.type]}` : `${op} does not apply to ${display} (${TYPE_LABEL[f.type]})`;
-      errors.push({ s: o.s, e: (peek(-1) || o).e, msg: why });
+      const why = f.type === "latency" ? "Latency takes >, <, >=, <= or BETWEEN" : op.startsWith("IP") ? "IP operators work only on fields that hold IP addresses" : CMP.has(op) || op === "BETWEEN" ? `${op} needs a number field, ${display} holds ${TYPE_LABEL[f.type]}` : `${op} does not apply to ${display} (${TYPE_LABEL[f.type]})`;
+      const base = op.endsWith("*") && opsFor(f).includes(op.slice(0, -1)) ? op.slice(0, -1) : null;
+      errors.push({ s: o.s, e: (peek(-1) || o).e, msg: base ? `${op} does not apply to ${display}, use ${base}` : why, ...base ? { fix: { s: o.s, e: o.e, text: base, verb: "Use", label: base } } : {} });
     }
     if (op === "PRESENT" || op === "ABSENT") {
       node.e = o.e;
       return node;
     }
     if (op === "BETWEEN") {
-      const lo = value(false);
+      const lo = value(false, "number");
       const a = peek();
-      if (!isKw(a, "AND")) fail(a, "BETWEEN needs AND, like BETWEEN 200 AND 299");
+      if (!isKw(a, "AND")) fail(a, "BETWEEN needs AND, like BETWEEN 200 AND 299", (a == null ? void 0 : a.t) === "num" ? { s: lo.tok.s, e: a.e, at: lo.tok.e, fix: { s: lo.tok.e, e: lo.tok.e, text: " AND", verb: "Add", label: "AND" } } : void 0);
       role(a, "op");
       p++;
-      const hi = value(false);
+      const hi = value(false, "number");
       numFix(lo, display);
       numFix(hi, display);
-      if (Number(lo.v) > Number(hi.v)) errors.push({ s: lo.tok.s, e: hi.tok.e, msg: "The first number must be the smaller one" });
+      if (Number(lo.v) > Number(hi.v)) errors.push({ s: lo.tok.s, e: hi.tok.e, msg: "The first number must be the smaller one", fix: { s: lo.tok.s, e: hi.tok.e, text: `${hi.raw} AND ${lo.raw}`, verb: "Swap to", label: `${hi.raw} AND ${lo.raw}` } });
       Object.assign(node, { lo, hi, e: hi.tok.e });
       return node;
     }
     if (op === "ANYONE" || op === "NONEOF") {
-      const l = list();
+      const l = list(true, f == null ? void 0 : f.type);
       for (const v2 of l.vals) typeFix(f, v2, display);
       Object.assign(node, { vals: l.vals, e: l.e });
       return node;
@@ -466,13 +566,15 @@ function parse(src, schema) {
       node.vals = vals;
       return node;
     }
-    const v = value(!TEXT_OPS.has(op));
+    const v = value(!TEXT_OPS.has(op), f == null ? void 0 : f.type);
     node.val = v;
     node.e = v.tok.e;
     if (TEXT_OPS.has(op) && v.tok.t !== "str") errors.push({ s: v.tok.s, e: v.tok.e, msg: `${op} takes text in quotes`, fix: { s: v.tok.s, e: v.tok.e, text: `"${v.tok.raw}"`, label: `"${v.tok.raw}"` } });
     else if (REGEX.has(op)) {
       try {
         new RegExp(v.v);
+        const pg = pgRegex(v.v);
+        if (pg) errors.push({ s: v.tok.s, e: v.tok.e, msg: pg.msg, ...pg.fix ? { fix: { s: v.tok.s, e: v.tok.e, text: lit(pg.fix), label: lit(pg.fix) } } : {} });
       } catch (err) {
         errors.push({ s: v.tok.s, e: v.tok.e, msg: `Invalid regex: ${String(err.message).replace(/^Invalid regular expression: /, "")}` });
       }
@@ -489,7 +591,7 @@ function parse(src, schema) {
     role(peek(1), "fn");
     p += 2;
     const o = peek();
-    if (!o || o.t !== "op" || REGEX.has(o.v) || o.v === "!=") fail(o, "COUNT() takes >, <, >=, <= or ==");
+    if (!o || o.t !== "op" || REGEX.has(o.v) || o.v === "!=") fail(o, "COUNT() takes >, <, >=, <= or ==", (o == null ? void 0 : o.t) === "num" ? { fix: { s: o.s, e: o.s, text: "> ", verb: "Add", label: ">" } } : void 0);
     role(o, "op");
     p++;
     const n = peek();
@@ -501,7 +603,7 @@ function parse(src, schema) {
       role(peek(), "kw");
       p++;
       const d = peek();
-      if (d && d.t === "num") fail(d, `Add a unit: ${d.raw}s, ${d.raw}m, ${d.raw}h or ${d.raw}d`);
+      if (d && d.t === "num") fail(d, `Add a unit: ${d.raw}s, ${d.raw}m, ${d.raw}h or ${d.raw}d`, { fix: ["s", "m", "h", "d"].map((u) => ({ s: d.s, e: d.e, text: d.raw + u, verb: "Use", label: d.raw + u })) });
       if (!d || d.t !== "dur") fail(d, "WITHIN takes a window like 5m");
       role(d, "num");
       p++;
@@ -583,6 +685,15 @@ function parse(src, schema) {
       if (!err || err.msg === void 0) throw err;
       syntax = err;
       ast = null;
+      const k = toks.findIndex((t, j) => {
+        var _a;
+        return t.t === "str" && t.closed && ((_a = toks[j + 1]) == null ? void 0 : _a.t) === "word" && toks[j + 1].s === t.e && /\s(?:AND|OR|ANYONE|NONEOF|CONTAINS|BETWEEN)\s|[=!<>~[]|,\s*$|\b(?:data|metadata)\./.test(t.v);
+      });
+      if (k >= 0 && toks[k].s <= Math.max(syntax.s, syntax.e, syntax.at ?? 0)) {
+        const w = toks[k].raw.slice(1).match(/^[^\s",]*/)[0];
+        const at = toks[k].s + 1 + w.length;
+        syntax = { s: toks[k].s, e: at, at, msg: `Missing " after ${w}`, fix: { s: at, e: at, text: '"', verb: "Add", label: `" after ${w}` } };
+      }
     }
   }
   if (ast) {
@@ -817,30 +928,34 @@ function context(src, caret, schema) {
       const at = items.findIndex((x) => x.group !== "Common");
       if (match("latency") || match(LATENCY)) items.splice(at < 0 ? items.length : at, 0, { kind: "field", label: LATENCY, sub: "latency in ms", insert: LATENCY + " ", type: "latency", group: "Common", reopen: true });
       const prev = toks[toks.length - 1];
-      if (!hasCount && depth === 0 && (!prev || prev.t === "kw" && prev.v === "AND") && match("count()")) items.push({ kind: "fn", label: "COUNT()", sub: "threshold on matching calls, goes last", insert: "COUNT() ", group: "Functions", reopen: true, pin: true });
-      if (match("not")) items.push({ kind: "kw", label: "NOT", sub: "negate the next condition or group", insert: "NOT ", group: "Logic", reopen: true, pin: true });
+      if (!hasCount && depth === 0 && (!prev || prev.t === "kw" && prev.v === "AND") && match("count()")) items.push({ kind: "fn", label: "COUNT()", sub: "number of matching calls, e.g. COUNT() > 50 WITHIN 5m", insert: "COUNT() ", group: "Functions", reopen: true, pin: true });
+      if (match("not")) items.push({ kind: "kw", label: "NOT", sub: 'exclude matching calls, e.g. NOT data.request.verb == "GET"', insert: "NOT ", group: "Logic", reopen: true, pin: true });
       if (!q) items.push({ kind: "kw", label: "(", sub: "start a group", insert: "(", group: "Logic", reopen: true, pin: true });
     }
     return res("fields", st === "term" ? "Fields" : "Group by", items, { total: schema.fields.length });
   }
   if (st === "op") {
     if (!field || !field.type) return null;
-    const ops = opsFor(field).filter((o) => !q || o.toLowerCase().startsWith(q) || OP_INFO[o].includes(q));
+    const allowed = opsFor(field);
+    const ops = BUILD_OPS.flatMap(([g, list]) => list.flatMap((o) => o === "~" || o === "!~" ? [o, o + "*"] : [o]).map((o) => [o, g])).filter(([o]) => allowed.includes(o) && (!q || o.toLowerCase().startsWith(q) || OP_INFO[o].includes(q)));
     const hasValues = VALUE_FIELDS.includes(field.path);
-    const items = ops.map((o) => {
+    const after = src.slice(to);
+    const valued = /^\s*(?:"|\[|-?\d|true\b|false\b)/i.test(after);
+    const items = ops.map(([o, group]) => {
       let insert = o + " ";
       let caretAt = null;
       let reopen = false;
-      if (o === "PRESENT" || o === "ABSENT") reopen = true;
+      if (o === "PRESENT" || o === "ABSENT" || o === "BETWEEN" || CMP.has(o)) reopen = true;
       else if (o === "ANYONE" || o === "NONEOF") insert = o + " []", caretAt = insert.length - 1, reopen = hasValues || field.type === "boolean";
       else if (o.startsWith("IP")) insert = o + ' ""', caretAt = insert.length - 1, reopen = true;
       else if (o === "==" || o === "!=") {
         if (hasValues || field.type === "boolean") reopen = true;
         else if (field.type !== "number" && field.type !== "latency") insert = o + ' ""', caretAt = insert.length - 1;
-      } else if (TEXT_OPS.has(o)) insert = o + ' ""', caretAt = insert.length - 1;
-      return { kind: "op", label: o, sub: OP_INFO[o], insert, caretAt, reopen };
+      } else if (TEXT_OPS.has(o)) insert = o + ' ""', caretAt = insert.length - 1, reopen = o.includes("~");
+      if (valued) insert = o + (/^\s/.test(after) ? "" : " "), caretAt = null, reopen = false;
+      return { kind: "op", label: o, sub: OP_INFO[o], insert, caretAt, reopen, group };
     });
-    return res("ops", `Operators \xB7 ${field.path === "@latency" ? LATENCY : field.path}`, items, { field });
+    return res("ops", "Operators", items, { field });
   }
   if (st === "notc") return kws([{ kind: "op", label: "CONTAINS", sub: OP_INFO["NOT CONTAINS"], insert: 'CONTAINS ""', caretAt: 10 }], "Operators");
   if (st === "ipop") return kws(["IN_RANGE", "NOT_IN_RANGE"].map((x) => ({ kind: "op", label: x, sub: OP_INFO["IP " + x], insert: x + ' ""', caretAt: x.length + 2, reopen: true })), "Operators");
@@ -852,11 +967,38 @@ function context(src, caret, schema) {
     "data.request.port": [["0 AND 1023", "Well-known ports"], ["1024 AND 49151", "Registered ports"], ["49152 AND 65535", "Dynamic ports"], ["8000 AND 8999", "8xxx app ports"]]
   };
   const nums = (list, title) => res("ops", title, list.map(([label, sub]) => ({ kind: "op", label: String(label), sub, insert: label + " ", num: true, reopen: true })).filter((x) => !q || x.label.startsWith(q)));
+  if (st === "value" && between && (field == null ? void 0 : field.type) === "latency" && !q) return nums([["0 AND 100", "under 100 ms"], ["100 AND 500", "100 to 500 ms"], ["500 AND 1000", "500 ms to 1 s"], ["1000 AND 5000", "1 to 5 s"], ["5000 AND 10000", "5 to 10 s"]], "Example ranges \xB7 latency in ms");
   if (st === "value" && between && ranges[field == null ? void 0 : field.path]) return nums(ranges[field.path], `Example ranges \xB7 ${field.path}`);
   if ((st === "value" || st === "list") && (op == null ? void 0 : op.startsWith("IP"))) {
     const lastTok = toks[toks.length - 1];
     const lead = inList && !part && used.length && !(lastTok && lastTok.v === ",") ? ", " : "";
     return res("ops", `Example ranges \xB7 ${field == null ? void 0 : field.path}`, [["10.0.0.0/8", "Private network, 10.x.x.x"], ["172.16.0.0/12", "Private network, 172.16 to 172.31"], ["192.168.0.0/16", "Private network, 192.168.x.x"], ["127.0.0.0/8", "Loopback"], ["169.254.0.0/16", "Link-local"], ["10.0.0.1-10.0.0.50", "First to last address"]].filter(([v]) => !used.includes(v)).map(([v, sub]) => ({ kind: "op", label: `"${v}"`, sub, insert: lead + `"${v}"` + (inList ? "" : " "), str: true, reopen: true })).filter((x) => !q || x.label.includes(q)), { list: inList });
+  }
+  if (st === "value" && (op == null ? void 0 : op.includes("~")) && field) {
+    const patterns = {
+      "data.response.statusCode": [["^5\\d\\d$", "any 5XX code"], ["^4\\d\\d$", "any 4XX code"], ["^(401|403)$", "401 or 403"], ["^2", "starts with 2"]],
+      "data.request.verb": [["^(GET|HEAD)$", "GET or HEAD"], ["^P", "POST, PUT or PATCH"], ["^(POST|PUT|PATCH|DELETE)$", "any write method"]]
+    }[field.path];
+    if (patterns) return res("ops", `Example patterns \xB7 ${field.path}`, patterns.map(([v, sub]) => ({ kind: "op", label: lit(v), sub, insert: lit(v) + " ", str: true, reopen: true })).filter((x) => !q || x.label.toLowerCase().includes(q)));
+    if ((part == null ? void 0 : part.t) === "str") {
+      const syntax = [["^", "start of text"], ["$", "end of text"], [".", "any one character"], ["\\d", "a digit"], ["\\w", "a letter, digit or _"], ["\\s", "a space"], ["[abc]", "one of a, b or c", "[]", 1], ["[^abc]", "anything except a, b or c", "[^]", 2], ["a|b", "a or b", "|"], ["(ab)", "a group", "()", 1], ["*", "zero or more of the previous"], ["+", "one or more of the previous"], ["?", "previous is optional"], ["{3}", "exactly 3 of the previous", "{}", 1], ["\\.", "a literal dot"]];
+      return res("ops", `Regex syntax \xB7 ${field.path}`, syntax.map(([label, sub, ins = label, at]) => ({ kind: "op", label, sub, insert: ins, caretAt: at, from: caret, to: caret, str: true, reopen: true })));
+    }
+  }
+  const bands = {
+    "data.response.statusCode": [[100, 199, "1XX"], [200, 299, "2XX"], [300, 399, "3XX"], [400, 499, "4XX"], [500, 599, "5XX"], ""],
+    "data.request.port": [[0, 1023, "well-known"], [1024, 49151, "registered"], [49152, 65535, "dynamic"], " ports"]
+  }[field == null ? void 0 : field.path];
+  if (st === "value" && CMP.has(op) && bands && !q) {
+    const cls2 = bands.slice(0, -1);
+    const suf = bands[bands.length - 1];
+    const test2 = (x, t) => op === "<" ? x < t : op === "<=" ? x <= t : op === ">" ? x > t : x >= t;
+    const label = (t) => {
+      const cs = cls2.filter(([lo, hi]) => test2(lo, t) && test2(hi, t)).map(([, , n]) => n);
+      return cs.length === 1 ? `${cs[0]}${suf} only` : `${cs[0]} ${cs.length === 2 ? "and" : "to"} ${cs[cs.length - 1]}${suf}`;
+    };
+    const edges = op === "<" || op === ">=" ? cls2.slice(1).map(([lo]) => lo) : cls2.slice(0, -1).map(([, hi]) => hi);
+    return nums(edges.map((t) => [t, label(t)]), `Example thresholds \xB7 ${field.path}`);
   }
   if (st === "value" && CMP.has(op) && (field == null ? void 0 : field.type) === "latency" && !q) return nums([[100, "100 ms"], [250, "250 ms"], [500, "500 ms"], [1e3, "1 s"], [2e3, "2 s"], [5e3, "5 s"], [1e4, "10 s"]], "Example thresholds \xB7 latency in ms");
   if (st === "value" && !between && !(op == null ? void 0 : op.startsWith("IP")) && !CMP.has(op) || st === "list") {
@@ -875,11 +1017,11 @@ function context(src, caret, schema) {
   if (st === "joiner" || st === "end") {
     const items = [];
     if (st === "joiner") {
-      items.push({ kind: "kw", label: "AND", sub: "both must match", insert: pad + "AND ", reopen: true });
-      items.push({ kind: "kw", label: "OR", sub: "either can match", insert: pad + "OR ", reopen: true });
-      items.push({ kind: "kw", label: "AND NOT", sub: "exclude the next condition", insert: pad + "AND NOT ", reopen: true });
-      if (depth > 0) items.push({ kind: "kw", label: ")", sub: "close the group", insert: ") ", trim: true, reopen: true });
-      if (!hasCount && depth === 0) items.push({ kind: "fn", label: "AND COUNT()", sub: "threshold on matching calls", insert: pad + "AND COUNT() ", reopen: true });
+      items.push({ kind: "kw", label: "AND", sub: "both must match, e.g. AND data.response.statusCode >= 500", insert: pad + "AND ", reopen: true });
+      items.push({ kind: "kw", label: "OR", sub: 'either can match, e.g. OR data.request.verb == "PUT"', insert: pad + "OR ", reopen: true });
+      items.push({ kind: "kw", label: "AND NOT", sub: 'exclude matching calls, e.g. AND NOT data.request.path CONTAINS "/health"', insert: pad + "AND NOT ", reopen: true });
+      if (depth > 0) items.push({ kind: "kw", label: ")", sub: "close the group, e.g. (A OR B) AND C", insert: ") ", trim: true, reopen: true });
+      if (!hasCount && depth === 0) items.push({ kind: "fn", label: "AND COUNT()", sub: "number of matching calls, e.g. AND COUNT() > 50 WITHIN 5m", insert: pad + "AND COUNT() ", reopen: true });
     }
     if (st === "joiner" && eq && catalog && !q) return res("kw", "Combine", [...another(eq), ...items.map((x) => ({ ...x, group: "Join conditions", pin: true }))]);
     return kws(items, "Combine");
@@ -1207,6 +1349,18 @@ function OpPicker({ value, type, onPick }) {
     ] })
   ] });
 }
+function Options({ list, value, field, quoted, onPick, children }) {
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "flex max-h-[280px] flex-col gap-1 overflow-y-auto no-scrollbar p-2", children: [
+    Object.entries(list.reduce((g, v) => ((g[/^\d{3}$/.test(v) ? v[0] + "XX" : ""] ||= []).push(v), g), {})).map(([k, vs]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "flex flex-wrap items-center gap-1", children: [
+      k && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "w-8 shrink-0 text-interface-labels-xs-normal text-text-default-subdued", children: k }),
+      vs.map((v) => {
+        const st = valueStyle(v, field);
+        return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { onMouseDown: (e) => e.preventDefault(), onClick: () => onPick(v), style: { ...st, outline: v === value ? "2px solid var(--color-stroke-active)" : "none", outlineOffset: 1 }, className: `h-6 rounded px-1.5 font-mono text-code-editor-small hover:opacity-80 ${(st == null ? void 0 : st.background) ? "" : "bg-surface-default-underground"} ${st ? "" : "text-text-default-regular"}`, children: quoted && !st ? `"${v}"` : v }, v);
+      })
+    ] }, k)),
+    children
+  ] });
+}
 function ValuePick({ value, options, quoted, onPick, add, field }) {
   const btn = (0, import_react.useRef)(null);
   const [open, setOpen] = (0, import_react.useState)(false);
@@ -1244,34 +1398,30 @@ function ValuePick({ value, options, quoted, onPick, add, field }) {
           }
         )
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "flex max-h-[280px] flex-col gap-1 overflow-y-auto no-scrollbar p-2", children: [
-        Object.entries(list.reduce((g, v) => ((g[/^\d{3}$/.test(v) ? v[0] + "XX" : ""] ||= []).push(v), g), {})).map(([k, vs]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { className: "flex flex-wrap items-center gap-1", children: [
-          k && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "w-8 shrink-0 text-interface-labels-xs-normal text-text-default-subdued", children: k }),
-          vs.map((v) => {
-            const st = valueStyle(v, field);
-            return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { onClick: () => pick(v), style: { ...st, outline: v === value ? "2px solid var(--color-stroke-active)" : "none", outlineOffset: 1 }, className: `h-6 rounded px-1.5 font-mono text-code-editor-small hover:opacity-80 ${(st == null ? void 0 : st.background) ? "" : "bg-surface-default-underground"} ${st ? "" : "text-text-default-regular"}`, children: quoted && !st ? `"${v}"` : v }, v);
-          })
-        ] }, k)),
-        !list.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { className: "px-0.5 py-1 text-interface-body-s-light text-text-default-subdued", children: [
-          "Enter adds \u201C",
-          q,
-          "\u201D"
-        ] })
-      ] })
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Options, { list, value, field, quoted, onPick: pick, children: !list.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { className: "px-0.5 py-1 text-interface-body-s-light text-text-default-subdued", children: [
+        "Enter adds \u201C",
+        q,
+        "\u201D"
+      ] }) })
     ] })
   ] });
 }
-function Chips({ values, onValues, placeholder, quoted, field }) {
+function Chips({ values, onValues, placeholder, quoted, field, options }) {
   const [draft, setDraft] = (0, import_react.useState)("");
+  const [open, setOpen] = (0, import_react.useState)(false);
   const ref = (0, import_react.useRef)(null);
+  const box = (0, import_react.useRef)(null);
+  const x = draft.trim().toLowerCase();
+  const list = (options || []).filter((o) => !values.includes(o) && (!x || o.toLowerCase().includes(x)));
   const add = (raw) => {
     const vals = raw.split(/[,\n]/).map((v) => v.trim().replace(/^"(.*)"$/s, "$1")).filter(Boolean);
     if (vals.length) onValues([...values, ...vals.filter((v) => !values.includes(v))]);
     setDraft("");
+    setOpen(false);
   };
-  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { onClick: () => {
+  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { ref: box, onClick: () => {
     var _a;
-    return (_a = ref.current) == null ? void 0 : _a.focus();
+    return (_a = ref.current) == null ? void 0 : _a.focus(), setOpen(true);
   }, className: "flex min-h-7 min-w-0 max-w-[420px] flex-1 cursor-text flex-wrap items-center gap-1 rounded-md border border-stroke-subsection bg-surface-default-ground px-1 py-0.5 focus-within:border-stroke-active", children: [
     values.map((v) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { style: valueStyle(v, field) || void 0, className: "flex h-5 items-center gap-1 rounded bg-surface-default-underground pl-1.5 pr-0.5 font-mono text-code-editor-small text-text-default-regular", children: [
       quoted && !valueStyle(v, field) ? `"${v}"` : v,
@@ -1280,7 +1430,7 @@ function Chips({ values, onValues, placeholder, quoted, field }) {
         {
           onClick: (e) => {
             e.stopPropagation();
-            onValues(values.filter((x) => x !== v));
+            onValues(values.filter((x2) => x2 !== v));
           },
           "aria-label": `Remove ${v}`,
           className: "grid h-4 w-4 place-items-center rounded text-icon-subtle hover:bg-surface-hover-l1-hover",
@@ -1294,18 +1444,20 @@ function Chips({ values, onValues, placeholder, quoted, field }) {
         ref,
         value: draft,
         placeholder: values.length ? "" : `${placeholder}, then Enter`,
-        onChange: (e) => e.target.value.includes(",") ? add(e.target.value) : setDraft(e.target.value),
+        onFocus: () => setOpen(true),
+        onChange: (e) => (setOpen(true), e.target.value.includes(",") ? add(e.target.value) : setDraft(e.target.value)),
         onKeyDown: (e) => {
           if (e.key === "Enter") {
             e.preventDefault();
-            add(draft);
+            add(x && list[0] ? list[0] : draft);
           }
           if (e.key === "Backspace" && !draft && values.length) onValues(values.slice(0, -1));
         },
         onBlur: () => draft && add(draft),
         className: "h-5 min-w-[90px] flex-1 bg-transparent px-1 font-mono text-code-editor-small text-text-default-regular outline-none placeholder:font-sans placeholder:text-text-default-disabled"
       }
-    )
+    ),
+    open && list.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Menu, { anchor: box, width: field === "data.response.statusCode" ? 420 : 300, onClose: () => setOpen(false), children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Options, { list, field, quoted, onPick: add }) })
   ] });
 }
 function Values({ cond, type, onChange }) {
@@ -1327,7 +1479,7 @@ function Values({ cond, type, onChange }) {
     ] });
   if (a === "list")
     return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chips, { values: cond.values, onValues: set, placeholder, quoted, field: cond.field }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Chips, { values: cond.values, onValues: set, placeholder, quoted, field: cond.field, options: catalog }),
       catalog && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ValuePick, { add: true, options: catalog.filter((v) => !cond.values.includes(v)), quoted, field: cond.field, onPick: (v) => set([...cond.values, v]) })
     ] });
   if (a === "ip")
@@ -1505,8 +1657,8 @@ function Builder({ text, schema, onApply, onCancel }) {
         error
       ] }) : null,
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ml-auto" }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { onClick: () => setShow(!show), "aria-pressed": show, className: "h-6 shrink-0 rounded px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-regular hover:bg-surface-hover-l1-hover", children: show ? "Hide query" : "Show query" }),
-      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { onClick: onCancel, className: "h-6 shrink-0 rounded px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-regular hover:bg-surface-hover-l1-hover", children: "Cancel" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { onClick: () => setShow(!show), "aria-pressed": show, className: "h-6 shrink-0 rounded-[5px] border border-stroke-subsection bg-surface-default-ground px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-regular hover:bg-surface-hover-l1-hover", children: show ? "Hide query" : "Show query" }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { onClick: onCancel, className: "h-6 shrink-0 rounded-[5px] border border-stroke-subsection bg-surface-default-ground px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-regular hover:bg-surface-hover-l1-hover", children: "Cancel" }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { disabled: blocked, onClick: () => onApply(clean || ""), className: "h-6 shrink-0 rounded-[5px] border border-stroke-active bg-surface-default-action px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-static hover:bg-surface-default-action-hover disabled:cursor-not-allowed disabled:opacity-50", children: "Apply & run" })
     ] })
   ] });
@@ -1595,8 +1747,8 @@ var closes = (text, pos) => {
   }
   return n % 2 === 1;
 };
-function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors, runRef, adv, setAdv, placeholder }) {
-  var _a, _b;
+function QueryBox({ text, setText, schema, onRun, tools, actions, runErrors, setRunErrors, runRef, adv, setAdv, placeholder }) {
+  var _a, _b, _c, _d;
   const ta = (0, import_react2.useRef)(null);
   const pre = (0, import_react2.useRef)(null);
   const list = (0, import_react2.useRef)(null);
@@ -1611,7 +1763,8 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
   const sugg = (0, import_react2.useMemo)(() => focus && open ? context(text, caret, schema) : null, [focus, open, text, caret, schema]);
   const items = (sugg == null ? void 0 : sugg.items) || [];
   const parsed = (0, import_react2.useMemo)(() => parse(text, schema), [text, schema]);
-  const startHl = (sugg == null ? void 0 : sugg.title) === "Combine" || (sugg == null ? void 0 : sugg.title) === "Add another value" ? -1 : 0;
+  const [ranged, setRanged] = (0, import_react2.useState)(false);
+  const startHl = (sugg == null ? void 0 : sugg.title) === "Combine" || (sugg == null ? void 0 : sugg.title) === "Add another value" || ((_a = sugg == null ? void 0 : sugg.title) == null ? void 0 : _a.startsWith("Regex syntax")) ? -1 : 0;
   (0, import_react2.useLayoutEffect)(() => {
     setHl(startHl);
     if (list.current) list.current.scrollTop = 0;
@@ -1718,6 +1871,10 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
     const at = el.selectionStart;
     const live = el.value;
     last.current = live;
+    if (e.key === " " && at === el.selectionEnd && live[at - 1] === " " && !((live.slice(0, at).match(/(?<!\\)"/g) || []).length % 2)) {
+      e.preventDefault();
+      return;
+    }
     if (PAIRS[e.key] && at === el.selectionEnd && live[at] === e.key && (e.key !== '"' || closes(live, at))) {
       e.preventDefault();
       stepped.current = { pos: at + 1, c: e.key };
@@ -1734,6 +1891,12 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
       e.target.value = prev;
       setText(prev);
       skip(st.pos);
+      return;
+    }
+    if (value.length === prev.length + 1 && value.slice(pos - 2, pos) === ". " && value.slice(0, pos - 2) + " " + value.slice(pos) === prev) {
+      e.target.value = prev;
+      setText(prev);
+      skip(pos - 1);
       return;
     }
     const n = value.length - prev.length;
@@ -1754,7 +1917,7 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
     setOpen(true);
   };
   const sync = () => setCaret(ta.current.selectionStart);
-  const showCard = !adv && focus && open && items.length > 0;
+  const showCard = !adv && focus && open && !ranged && items.length > 0;
   const err = visible[0];
   const showNotice = !adv && !showCard && err && (focus || runErrors);
   const fix = (s, e, t) => {
@@ -1764,7 +1927,6 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
   const lifted = focus || showNotice || adv;
   const kfmt = (n) => n >= 1e3 ? (n / 1e3).toFixed(2).replace(/\.?0+$/, "") + "k" : n;
   let lastGroup = sugg == null ? void 0 : sugg.title;
-  const typeOf2 = (sugg == null ? void 0 : sugg.field) && sugg.field.type !== "numtext" ? TYPE_LABEL[sugg.field.type] : null;
   const row = "relative flex h-7 cursor-pointer items-center gap-2 rounded px-2";
   const chips = showCard && items.some((it) => !it.pin) && items.every((it) => it.pin || it.kind === "value");
   const rowsOf = [];
@@ -1815,7 +1977,7 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
         ] }),
         (it.kind === "op" || it.kind === "kw" || it.kind === "fn") && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: `shrink-0 font-mono text-code-editor-small font-semibold ${it.num ? ROLE.num : it.str ? ROLE.str : "text-text-color-purple"}`, children: it.label }),
-          it.sub && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "ml-auto min-w-0 truncate text-interface-body-s-normal text-text-default-regular", children: it.sub })
+          it.sub && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "ml-auto min-w-0 truncate text-interface-body-s-normal text-text-default-subdued", children: it.sub })
         ] }),
         it.kind === "value" && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
           vs ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { style: { ...vs, padding: vs.background ? "0 4px" : 0 }, className: "min-w-0 truncate font-mono text-code-editor-small", children: raw }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: `min-w-0 truncate font-mono text-code-editor-small ${it.label.startsWith('"') ? ROLE.str : it.label === "true" || it.label === "false" ? ROLE.bool : ROLE.num}`, children: it.label }),
@@ -1844,6 +2006,7 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
             spellCheck: false,
             "aria-label": "Filter",
             placeholder,
+            onSelect: (e) => setRanged(e.target.selectionStart !== e.target.selectionEnd),
             onChange,
             onKeyDown,
             onKeyUp: (e) => {
@@ -1893,7 +2056,10 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
         /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_react3.TreeStructure, { size: 14, className: adv ? "" : "text-icon-default" }),
         /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "whitespace-nowrap text-interface-body-s-heavy", children: "Advanced filter" })
       ] }) }),
-      tools && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "flex shrink-0 self-stretch border-l border-stroke-subsection pl-1 pr-1", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "flex min-h-[30px] items-start", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "flex min-h-[30px] items-center", children: tools }) }) })
+      (tools || actions) && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "flex shrink-0 self-stretch border-l border-stroke-subsection pl-1 pr-1", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "flex min-h-[30px] flex-col items-stretch", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "flex min-h-[30px] items-center", children: tools }),
+        focus && !adv && actions
+      ] }) })
     ] }),
     adv && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
       Builder,
@@ -1909,23 +2075,10 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
       }
     ),
     showCard && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "border-t border-stroke-subsection", onMouseDown: (e) => e.preventDefault(), children: [
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: `${grouped ? "hidden" : "flex"} items-center justify-between gap-3 px-3 pb-1 pt-2`, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "min-w-0 truncate text-interface-titles-caption text-text-default-subdued", children: [
-          sugg.title.toUpperCase(),
-          typeOf2 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "normal-case text-text-color-cyan", children: [
-            " \xB7 ",
-            typeOf2
-          ] })
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "shrink-0 text-interface-labels-xs-normal text-text-default-subtle", children: [
-          sugg.kind === "fields" ? items.filter((i) => i.type).length : items.length,
-          " ",
-          sugg.title.startsWith("Example") ? "examples" : "available"
-        ] })
-      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: `${grouped || chips && ((_b = rowsOf[0]) == null ? void 0 : _b.head) ? "hidden" : "flex"} items-center justify-between gap-3 px-3 pb-1 pt-2`, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "min-w-0 truncate text-interface-titles-caption text-text-default-subdued", children: sugg.title.toUpperCase() }) }),
       /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("ul", { ref: list, style: { maxHeight: 180 }, className: "no-scrollbar overflow-y-auto px-1 pb-1", children: chips ? rowsOf.map((r) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("li", { children: [
-        r.head && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "px-2 pb-1 pt-2 text-interface-titles-caption text-text-default-subdued", children: r.head.toUpperCase() }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "flex flex-wrap items-center gap-1 px-2 py-0.5", children: [
+        r.head && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "px-2 pb-1 pt-2 text-interface-titles-caption text-text-default-subdued", children: (r === rowsOf[0] && r.head !== sugg.title ? `${sugg.title} / ${r.head}` : r.head).toUpperCase() }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "flex flex-wrap items-center gap-1 px-2 py-1", children: [
           r.cls && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "w-8 shrink-0 text-interface-labels-xs-normal text-text-default-subdued", children: r.cls }),
           r.items.map(([it, i]) => {
             const raw = it.label.replace(/^"(.*)"$/, "$1");
@@ -1934,10 +2087,7 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
           })
         ] })
       ] }, r.items[0][1])) : grouped ? groupsOf.map((g) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("li", { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { style: { position: "sticky", top: 0, zIndex: 1 }, className: "flex items-center justify-between gap-3 bg-surface-default-l1 px-2 pb-1 pt-2 text-interface-titles-caption text-text-default-subdued", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "min-w-0 truncate", children: (g.group ? `${sugg.title} / ${g.group}` : sugg.title).toUpperCase() }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "shrink-0 text-interface-labels-xs-normal normal-case text-text-default-subtle", children: g.items.length })
-        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { position: "sticky", top: 0, zIndex: 1 }, className: "flex items-center justify-between gap-3 bg-surface-default-l1 px-2 pb-1 pt-2 text-interface-titles-caption text-text-default-subdued", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "min-w-0 truncate", children: (g.group ? `${sugg.title} / ${g.group}` : sugg.title).toUpperCase() }) }),
         /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("ul", { children: g.items.map(([it, i]) => renderRow(it, i, true)) })
       ] }, g.items[0][1])) : items.map((it, i) => !it.pin && renderRow(it, i)) }),
       items.some((it) => it.pin) && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("ul", { className: "border-t border-stroke-subsection px-1 pb-1", children: items.map((it, i) => it.pin && renderRow(it, i)) }),
@@ -1956,14 +2106,14 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
       /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(import_react3.Warning, { size: 14, weight: "fill", className: "mt-[3px] shrink-0 text-text-color-red" }),
       /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "min-w-0 flex-1", children: [
         /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "text-interface-labels-xs-normal leading-5 text-text-color-red", children: err.msg }),
-        (err.fix || ((_a = err.near) == null ? void 0 : _a.length) > 0) && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "mt-1 flex flex-wrap items-center gap-1", children: [
+        (err.fix || ((_c = err.near) == null ? void 0 : _c.length) > 0) && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "mt-1 flex flex-wrap items-center gap-1", children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "mr-1 text-interface-labels-xs-light text-text-default-subdued", children: "Suggestions" }),
-          [].concat(err.fix || []).map((f) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("button", { onClick: () => fix(f.s, f.e, f.text), className: "h-6 rounded border border-stroke-subsection px-2 font-mono text-interface-labels-xs-normal text-base-blue-1100 hover:bg-surface-hover-l1-hover", children: [
+          [].concat(err.fix || []).map((f) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("button", { onClick: () => fix(f.s, f.e, f.text), style: { minHeight: 24 }, className: "max-w-full break-words rounded border border-stroke-subsection px-2 py-0.5 text-left font-mono text-interface-labels-xs-normal text-base-blue-1100 hover:bg-surface-hover-l1-hover", children: [
             f.verb || "Use",
             " ",
             f.label
           ] }, f.verb + f.label)),
-          (_b = err.near) == null ? void 0 : _b.map((n) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { onClick: () => fix(err.s, err.e, n), className: "h-6 rounded border border-stroke-subsection px-2 font-mono text-interface-labels-xs-normal text-base-blue-1100 hover:bg-surface-hover-l1-hover", children: n }, n))
+          (_d = err.near) == null ? void 0 : _d.map((n) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { onClick: () => fix(err.s, err.e, n), style: { minHeight: 24 }, className: "max-w-full break-words rounded border border-stroke-subsection px-2 py-0.5 text-left font-mono text-interface-labels-xs-normal text-base-blue-1100 hover:bg-surface-hover-l1-hover", children: n }, n))
         ] }),
         visible.length > 1 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { className: "mt-1 text-interface-labels-xs-light text-text-default-subdued", children: [
           "and ",
@@ -1980,9 +2130,21 @@ function QueryBox({ text, setText, schema, onRun, tools, runErrors, setRunErrors
 var import_react4 = require("react");
 var import_react5 = require("@phosphor-icons/react");
 var import_jsx_runtime3 = require("react/jsx-runtime");
-function Saved({ saved, loading, schema, current, onPick, onPin, onDelete, onSave, onSearch, onClose }) {
+var ICON = { width: 13, height: 13, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true };
+var PIN = "M9 3h6l-1 6 4 4H6l4-4zM12 13v8";
+var FUNNEL = "M3 5h18l-7 8v6l-4 2v-8z";
+var BELL = "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4";
+var BOOKMARK = "M6 3h12v18l-6-4-6 4z";
+function QueryChip({ query, schema }) {
+  return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("code", { style: { fontSize: 11, lineHeight: "16px", paddingTop: 1, paddingBottom: 1 }, className: "flex w-fit max-w-full items-center gap-1 rounded border border-stroke-subsection bg-surface-default-underground px-1.5 font-mono text-text-default-regular", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("svg", { ...ICON, width: 12, height: 12, className: "shrink-0 text-icon-default", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: FUNNEL }) }),
+    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { "data-pqb-tip": query, "data-mono": "", "data-trunc": "", className: "min-w-0 truncate", children: paint(query.replace(/\s+/g, " ").trim(), schema) })
+  ] });
+}
+function Saved({ saved, loading, schema, onPick, onPin, onDelete, onUpdate, onAlert, onSearch, onClose }) {
   const [q, setQ] = (0, import_react4.useState)("");
-  const [name, setName] = (0, import_react4.useState)("");
+  const [editing, setEditing] = (0, import_react4.useState)(null);
+  const [removing, setRemoving] = (0, import_react4.useState)(null);
   const ref = (0, import_react4.useRef)(null);
   const close = (0, import_react4.useRef)(onClose);
   close.current = onClose;
@@ -1991,59 +2153,92 @@ function Saved({ saved, loading, schema, current, onPick, onPin, onDelete, onSav
       var _a;
       return !((_a = ref.current) == null ? void 0 : _a.contains(e.target)) && !e.target.closest("[data-pqb-saved]") && close.current();
     };
-    const key = (e) => e.key === "Escape" && close.current();
     document.addEventListener("mousedown", out, true);
-    document.addEventListener("keydown", key);
-    return () => {
-      document.removeEventListener("mousedown", out, true);
-      document.removeEventListener("keydown", key);
-    };
+    return () => document.removeEventListener("mousedown", out, true);
   }, []);
   const x = q.trim().toLowerCase();
   const hit = saved.filter((s) => !x || s.name.toLowerCase().includes(x) || s.query.toLowerCase().includes(x));
-  const parsed = current.trim() ? parse(current, schema) : null;
-  const valid = parsed && !parsed.errors.length;
-  const taken = saved.some((s) => s.name === name.trim());
-  const save = () => {
-    if (!valid || !name.trim() || taken) return;
-    onSave({ name: name.trim(), query: format(parsed.ast), pinned: false });
-    setName("");
+  const err = editing && editing.query.trim() ? parse(editing.query, schema).errors[0] : null;
+  const nameTaken = editing && saved.some((s) => s.id !== editing.id && s.name === editing.name.trim());
+  const submit = () => {
+    if (!editing.name.trim() || !editing.query.trim() || err || nameTaken) return;
+    onUpdate(saved.find((s) => s.id === editing.id), { name: editing.name.trim(), query: format(parse(editing.query, schema).ast) });
+    setEditing(null);
   };
-  const section = (title, list) => list.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
-    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-3 pb-1 pt-2.5 text-interface-titles-caption text-text-default-subdued", children: title }),
-    list.map((s) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { onClick: () => onPick(s), className: "group cursor-pointer px-3 py-1.5 hover:bg-surface-hover-l1-hover", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "flex items-center gap-1.5", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "min-w-0 flex-1 truncate text-interface-body-s-heavy text-text-default-regular", children: s.name }),
-        onDelete && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
-          "button",
-          {
-            "aria-label": "Delete",
-            "data-pqb-tip": "Delete",
-            onClick: (e) => {
-              e.stopPropagation();
-              onDelete(s);
-            },
-            className: "invisible grid h-5 w-5 shrink-0 place-items-center rounded text-icon-default hover:bg-surface-default-l2 group-hover:visible",
-            children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(import_react5.Trash, { size: 12 })
-          }
-        ),
-        onPin && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
-          "button",
-          {
-            "aria-label": s.pinned ? "Unpin" : "Pin",
-            "data-pqb-tip": s.pinned ? "Unpin" : "Pin",
-            onClick: (e) => {
-              e.stopPropagation();
-              onPin(s, !s.pinned);
-            },
-            className: `grid h-5 w-5 shrink-0 place-items-center rounded hover:bg-surface-default-l2 ${s.pinned ? "text-text-color-blue" : "invisible text-icon-default group-hover:visible"}`,
-            children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(import_react5.PushPin, { size: 12, weight: s.pinned ? "fill" : "regular" })
-          }
-        )
-      ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { "data-pqb-tip": s.query, "data-mono": "", className: "mt-0.5 truncate font-mono text-interface-labels-xs-normal", children: paint(s.query.replace(/\n/g, " "), schema) })
-    ] }, s.id))
-  ] });
+  const act = "grid h-6 w-6 place-items-center rounded text-text-default-subtle hover:bg-surface-default-l1 hover:text-text-default-regular";
+  const item = (s) => removing === s.id ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { onKeyDown: (e) => e.key === "Escape" && (e.stopPropagation(), setRemoving(null)), className: "flex items-center gap-1 bg-surface-hover-l1-hover px-2.5 py-1.5", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("span", { className: "min-w-0 flex-1 truncate text-interface-body-s-heavy text-text-default-regular", children: [
+      "Delete \u201C",
+      s.name,
+      "\u201D?"
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { onClick: () => (onDelete(s), setRemoving(null)), className: "h-6 rounded px-2 text-interface-labels-xs-normal font-semibold text-text-color-red hover:bg-surface-default-l1", children: "Delete" }),
+    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { autoFocus: true, onClick: () => setRemoving(null), className: "h-6 rounded border border-stroke-subsection bg-surface-default-l1 px-2 text-interface-labels-xs-normal font-semibold text-text-default-regular", children: "Cancel" })
+  ] }, s.id) : (editing == null ? void 0 : editing.id) === s.id ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
+    "div",
+    {
+      onKeyDown: (e) => {
+        if (e.key === "Escape") e.stopPropagation(), setEditing(null);
+        else if (e.key === "Enter" && !e.shiftKey && e.target.tagName !== "BUTTON") e.preventDefault(), submit();
+      },
+      className: "flex flex-col gap-1.5 bg-surface-hover-l1-hover px-2.5 py-1.5",
+      children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("input", { autoFocus: true, "aria-label": "Name", value: editing.name, onFocus: (e) => e.target.select(), onChange: (e) => setEditing({ ...editing, name: e.target.value }), className: "rounded border border-stroke-subsection bg-surface-default-l1 px-1.5 py-1 text-interface-body-s-heavy text-text-default-regular outline-none focus:border-stroke-active" }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("textarea", { "aria-label": "Query", rows: 3, spellCheck: false, value: editing.query, onChange: (e) => setEditing({ ...editing, query: e.target.value }), style: { fontSize: 11, lineHeight: "16px" }, className: "resize-none rounded border border-stroke-subsection bg-surface-default-l1 px-1.5 py-1 font-mono text-text-default-regular outline-none focus:border-stroke-active" }),
+        err && (() => {
+          const t = editing.query.replace(/\n/g, " ");
+          const from = Math.min(err.s, err.at ?? err.s);
+          const to = Math.max(err.e, err.at ?? err.e);
+          const lo = Math.max(0, from - 30);
+          const hi = Math.min(t.length, to + 30);
+          const fixes = [...[].concat(err.fix || []), ...(err.near || []).map((n) => ({ s: err.s, e: err.e, text: n, label: n, plain: true }))];
+          return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "flex flex-col gap-1", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "text-interface-labels-xs-normal text-text-color-red", children: err.msg }),
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("code", { style: { fontSize: 11, lineHeight: "16px" }, className: "whitespace-pre-wrap break-all rounded border border-stroke-subsection bg-surface-default-l1 px-1.5 py-0.5 font-mono text-text-default-subdued", children: [
+              lo > 0 && "\u2026",
+              t.slice(lo, from),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("span", { className: "rounded-sm bg-base-red-100 text-text-color-red", children: [
+                t.slice(from, err.s),
+                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("b", { className: "font-semibold", children: t.slice(err.s, err.e) }),
+                t.slice(err.e, to) || (from === to ? " " : "")
+              ] }),
+              t.slice(to, hi),
+              hi < t.length && "\u2026"
+            ] }),
+            fixes.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "flex flex-wrap items-center gap-1", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "mr-1 text-interface-labels-xs-light text-text-default-subdued", children: "Suggestions" }),
+              fixes.map((f) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { onClick: () => setEditing({ ...editing, query: editing.query.slice(0, f.s) + f.text + editing.query.slice(f.e) }), style: { minHeight: 24 }, className: "max-w-full break-words rounded border border-stroke-subsection bg-surface-default-l1 px-2 py-0.5 text-left font-mono text-interface-labels-xs-normal text-base-blue-1100 hover:bg-surface-default-underground", children: f.plain ? f.label : `${f.verb || "Use"} ${f.label}` }, (f.verb || "") + f.label))
+            ] })
+          ] });
+        })(),
+        !err && nameTaken && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { className: "text-interface-labels-xs-normal text-text-color-red", children: [
+          "A saved query is already called ",
+          editing.name.trim()
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "flex justify-end gap-2", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { onClick: () => setEditing(null), className: "h-6 rounded bg-surface-default-l1 px-2 text-interface-labels-xs-normal font-semibold text-text-default-regular hover:bg-surface-default-underground", children: "Cancel" }),
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { disabled: !editing.name.trim() || !editing.query.trim() || !!err || nameTaken, onClick: submit, className: "h-6 rounded-md border border-stroke-active bg-surface-default-action px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-static hover:bg-surface-default-action-hover disabled:cursor-not-allowed disabled:opacity-50", children: "Save" })
+        ] })
+      ]
+    },
+    s.id
+  ) : /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "group flex items-start gap-2 px-2.5 py-1.5 hover:bg-surface-hover-l1-hover", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("button", { onClick: () => onPick(s), style: { gap: 3 }, className: "flex min-w-0 flex-1 flex-col text-left", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { "data-pqb-tip": s.name, "data-trunc": "", className: "max-w-full truncate text-interface-body-s-heavy text-text-default-regular", children: s.name }),
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(QueryChip, { query: s.query, schema })
+    ] }),
+    /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("span", { className: "grid shrink-0 self-center", children: [
+      s.pinned && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("svg", { ...ICON, width: 14, height: 14, role: "img", "aria-label": "Pinned", style: { gridArea: "1 / 1", justifySelf: "end", marginRight: 5 }, className: "text-text-color-blue group-hover:hidden", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: PIN, fill: "currentColor" }) }),
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("span", { style: { gridArea: "1 / 1" }, className: "hidden gap-0.5 group-hover:flex", children: [
+        onPin && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { "aria-label": s.pinned ? `Unpin ${s.name}` : `Pin ${s.name}`, "data-pqb-tip": s.pinned ? "Unpin" : "Pin", onClick: () => onPin(s, !s.pinned), className: act, children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("svg", { ...ICON, children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: s.pinned ? PIN + "M4 4l16 16" : PIN }) }) }),
+        onAlert && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { "aria-label": `Create an alert from ${s.name}`, "data-pqb-tip": "Create alert", onClick: () => onAlert(s.query), className: act, children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("svg", { ...ICON, children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: BELL }) }) }),
+        onUpdate && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { "aria-label": `Edit ${s.name}`, "data-pqb-tip": "Edit", onClick: () => (setRemoving(null), setEditing({ id: s.id, name: s.name, query: s.query })), className: act, children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("svg", { ...ICON, children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: "M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" }) }) }),
+        onDelete && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { "aria-label": `Delete ${s.name}`, "data-pqb-tip": "Delete", onClick: () => (setEditing(null), setRemoving(s.id)), className: `${act} hover:text-text-color-red`, children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("svg", { ...ICON, children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: "M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" }) }) })
+      ] })
+    ] })
+  ] }, s.id);
+  const pinned = hit.filter((s) => s.pinned);
+  const rest = hit.filter((s) => !s.pinned);
   return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { ref, className: "absolute right-0 top-9 z-50 flex w-[380px] flex-col rounded-md border border-stroke-subsection bg-surface-default-l1 shadow-e300", children: [
     /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "flex h-9 items-center gap-1.5 border-b border-stroke-subsection px-3", children: [
       /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(import_react5.MagnifyingGlass, { size: 14, className: "shrink-0 text-icon-default" }),
@@ -2056,20 +2251,26 @@ function Saved({ saved, loading, schema, current, onPick, onPin, onDelete, onSav
             setQ(e.target.value);
             onSearch == null ? void 0 : onSearch(e.target.value);
           },
+          onKeyDown: (e) => {
+            if (e.key === "Escape") onClose();
+            else if (e.key === "Enter" && hit[0]) onPick(hit[0]);
+          },
           placeholder: "Search saved queries",
           className: "min-w-0 flex-1 bg-transparent text-interface-body-s-normal text-text-default-regular outline-none placeholder:text-text-default-disabled"
         }
       )
     ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "max-h-[min(520px,70vh)] overflow-y-auto no-scrollbar pb-1", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { style: { maxHeight: "min(520px, 70vh)" }, className: "overflow-y-auto no-scrollbar py-1", children: [
       loading && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-3 py-3 text-interface-body-s-light text-text-default-subdued", children: "Loading saved queries" }),
-      section("PINNED", hit.filter((s) => s.pinned)),
-      section("ALL SAVED", hit.filter((s) => !s.pinned)),
-      !loading && !hit.length && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-3 py-3 text-interface-body-s-light text-text-default-subdued", children: saved.length ? "No saved query matches" : "No saved queries yet" })
-    ] }),
-    onSave && valid && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "flex items-center gap-1.5 border-t border-stroke-subsection p-2", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("input", { value: name, onChange: (e) => setName(e.target.value), onKeyDown: (e) => e.key === "Enter" && save(), placeholder: "Name the current query", className: "h-7 min-w-0 flex-1 rounded-md border border-stroke-subsection bg-transparent px-2 text-interface-body-s-normal text-text-default-regular outline-none placeholder:text-text-default-disabled focus:border-stroke-active" }),
-      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { disabled: !name.trim() || taken, onClick: save, className: "h-7 shrink-0 rounded-[5px] border border-stroke-active bg-surface-default-action px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-static hover:bg-surface-default-action-hover disabled:cursor-not-allowed disabled:opacity-50", children: "Save" })
+      pinned.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-2.5 pb-0.5 pt-1 text-interface-titles-caption text-text-default-subdued", children: "PINNED" }),
+        pinned.map(item)
+      ] }),
+      rest.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: pinned.length ? "mt-1 border-t border-stroke-subsection pt-1" : "", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-2.5 pb-0.5 pt-1 text-interface-titles-caption text-text-default-subdued", children: "ALL SAVED" }),
+        rest.map(item)
+      ] }),
+      !loading && !hit.length && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-3 py-5 text-center text-interface-body-s-light text-text-default-subdued", children: q ? "No saved queries match." : "No saved queries yet. Type a filter and press Save." })
     ] })
   ] });
 }
@@ -2092,7 +2293,9 @@ var PostgresQueryBox = (0, import_react6.forwardRef)(function PostgresQueryBox2(
   onPinSaved,
   onSaveQuery,
   onDeleteSaved,
+  onUpdateSaved,
   onSavedSearch,
+  onCreateAlert,
   className = ""
 }, ref) {
   const root = (0, import_react6.useRef)(null);
@@ -2114,6 +2317,35 @@ var PostgresQueryBox = (0, import_react6.forwardRef)(function PostgresQueryBox2(
     setPanelState(v);
     if (v) setAdvState(false);
   };
+  const parsed = text.trim() ? parse(text, schema) : null;
+  const valid = !!parsed && !parsed.errors.length;
+  const clean = valid ? format(parsed.ast) : "";
+  const match = onUpdateSaved && (saved == null ? void 0 : saved.find((s) => s.query === clean));
+  const [draft, setDraft] = (0, import_react6.useState)(null);
+  const popRef = (0, import_react6.useRef)(null);
+  const taken = draft && (saved == null ? void 0 : saved.some((s) => s.id !== (match == null ? void 0 : match.id) && s.name === draft.name.trim()));
+  (0, import_react6.useEffect)(() => {
+    if (!draft) return;
+    const out = (e) => {
+      var _a;
+      return !((_a = popRef.current) == null ? void 0 : _a.contains(e.target)) && setDraft(null);
+    };
+    document.addEventListener("mousedown", out);
+    return () => document.removeEventListener("mousedown", out);
+  }, [!draft]);
+  const submitDraft = () => {
+    if (!draft.name.trim() || taken) return;
+    if (match) onUpdateSaved(match, { name: draft.name.trim(), pinned: draft.pinned });
+    else onSaveQuery({ name: draft.name.trim(), query: clean, pinned: draft.pinned });
+    setDraft(null);
+  };
+  const openAlert = (q) => {
+    var _a, _b;
+    (_b = (_a = root.current) == null ? void 0 : _a.querySelector("textarea")) == null ? void 0 : _b.blur();
+    setPanel(false);
+    const p = parse(q, schema);
+    onCreateAlert(format(p.ast), p.ast);
+  };
   (0, import_react6.useImperativeHandle)(ref, () => ({
     focus: () => {
       var _a, _b;
@@ -2131,9 +2363,9 @@ var PostgresQueryBox = (0, import_react6.forwardRef)(function PostgresQueryBox2(
     onSelectSaved == null ? void 0 : onSelectSaved(s);
     setPanel(false);
     const p = parse(s.query, schema);
-    const clean = p.errors.length ? s.query : format(p.ast);
-    setText(clean);
-    (_a = runRef.current) == null ? void 0 : _a.call(runRef, clean);
+    const clean2 = p.errors.length ? s.query : format(p.ast);
+    setText(clean2);
+    (_a = runRef.current) == null ? void 0 : _a.call(runRef, clean2);
   };
   const extra = tools || saved ? /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(import_jsx_runtime4.Fragment, { children: [
     tools,
@@ -2144,22 +2376,152 @@ var PostgresQueryBox = (0, import_react6.forwardRef)(function PostgresQueryBox2(
         /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "rounded-full bg-surface-hover-l1-hover px-1.5 text-interface-labels-xxs-normal text-text-default-subdued", children: savedCount ?? saved.length }),
         /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(import_react7.CaretDown, { size: 12, className: "shrink-0 text-text-default-subtle" })
       ] }),
-      panel && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(Saved, { saved, loading: savedLoading, schema, current: text, onPick: pick, onPin: onPinSaved, onDelete: onDeleteSaved, onSave: onSaveQuery, onSearch: onSavedSearch, onClose: () => setPanel(false) })
+      panel && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(Saved, { saved, loading: savedLoading, schema, onPick: pick, onPin: onPinSaved, onDelete: onDeleteSaved, onUpdate: onUpdateSaved, onAlert: onCreateAlert && openAlert, onSearch: onSavedSearch, onClose: () => setPanel(false) })
     ] })
   ] }) : null;
-  return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { ref: root, className: `pqb flex min-w-0 items-start gap-2 ${className}`, children: [
-    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(QueryBox, { text, setText, schema, onRun, tools: extra, runErrors, setRunErrors, runRef, adv, setAdv, placeholder }),
-    /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("button", { onClick: () => {
-      var _a;
-      return (_a = runRef.current) == null ? void 0 : _a.call(runRef);
-    }, className: "flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-stroke-active bg-surface-default-action px-3 hover:bg-surface-default-action-hover", children: [
-      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(import_react7.Play, { size: 14, weight: "fill", className: "text-text-default-static" }),
-      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "whitespace-nowrap text-interface-labels-xs-normal font-semibold text-text-default-static", children: runLabel })
+  const actions = [
+    onSaveQuery && ["Save", BOOKMARK, (e) => {
+      const r = e.currentTarget.getBoundingClientRect();
+      setPanel(false);
+      setDraft({ name: (match == null ? void 0 : match.name) ?? text.replace(/\b(?:data|metadata)\.[\w.-]+/g, (x) => x.split(".").pop()).replace(/\s+/g, " ").trim().slice(0, 60), pinned: !!(match == null ? void 0 : match.pinned), top: r.bottom + 6, left: Math.max(8, r.right - 280) });
+    }],
+    onCreateAlert && ["Create alert", BELL, () => openAlert(text)]
+  ].filter(Boolean);
+  return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { ref: root, className: `pqb ${className}`, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "flex min-w-0 items-start gap-2", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(QueryBox, { text, setText, schema, onRun, tools: extra, actions: actions.length > 0 && actions.map(([label, d, go]) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("button", { disabled: !valid, onMouseDown: (e) => e.preventDefault(), onClick: go, className: "flex h-6 items-center gap-1.5 rounded px-1.5 text-left hover:bg-surface-hover-l1-hover disabled:cursor-not-allowed disabled:opacity-50", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("svg", { ...ICON, width: 14, height: 14, className: "shrink-0 text-icon-default", children: /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("path", { d }) }),
+        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "whitespace-nowrap text-interface-body-s-normal text-text-default-regular", children: label })
+      ] }, label)), runErrors, setRunErrors, runRef, adv, setAdv, placeholder }),
+      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("button", { onClick: () => {
+        var _a;
+        return (_a = runRef.current) == null ? void 0 : _a.call(runRef);
+      }, className: "flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-stroke-active bg-surface-default-action px-3 hover:bg-surface-default-action-hover", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(import_react7.Play, { size: 14, weight: "fill", className: "text-text-default-static" }),
+        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "whitespace-nowrap text-interface-labels-xs-normal font-semibold text-text-default-static", children: runLabel })
+      ] })
     ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(Tips, { root })
+    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(Tips, { root }),
+    draft && /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(
+      "div",
+      {
+        ref: popRef,
+        role: "dialog",
+        "aria-label": "Save query as",
+        onKeyDown: (e) => {
+          if (e.key === "Escape") setDraft(null);
+          else if (e.key === "Enter" && e.target.tagName !== "BUTTON") e.preventDefault(), submitDraft();
+        },
+        style: { position: "fixed", top: draft.top, left: draft.left, width: 280, zIndex: 60 },
+        className: "flex flex-col gap-2 rounded-md border border-stroke-subsection bg-surface-default-l1 p-3 shadow-e300",
+        children: [
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: "text-interface-body-s-heavy text-text-default-regular", children: "Save query as" }),
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("input", { autoFocus: true, "aria-label": "Name", value: draft.name, onFocus: (e) => e.target.select(), onChange: (e) => setDraft({ ...draft, name: e.target.value }), className: "rounded-md border border-stroke-subsection bg-surface-default-underground px-2 py-1.5 text-interface-body-s-normal font-medium text-text-default-regular outline-none focus:border-stroke-active" }),
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { className: "flex cursor-pointer items-center gap-1.5 text-interface-labels-xs-normal font-medium text-text-default-subdued", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("input", { type: "checkbox", checked: draft.pinned, onChange: (e) => setDraft({ ...draft, pinned: e.target.checked }), style: { width: 14, height: 14, margin: 0, accentColor: "var(--color-stroke-active)" } }),
+            "Pin to the top of Queries"
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(QueryChip, { query: clean, schema }),
+          taken && /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("p", { className: "text-interface-labels-xs-normal text-text-color-red", children: [
+            "A saved query is already called ",
+            draft.name.trim()
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "flex justify-end gap-2", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { onClick: () => setDraft(null), className: "h-6 rounded px-2 text-interface-labels-xs-normal font-semibold text-text-default-regular hover:bg-surface-hover-l1-hover", children: "Cancel" }),
+            /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { disabled: !draft.name.trim() || taken, onClick: submitDraft, className: "h-6 rounded-md border border-stroke-active bg-surface-default-action px-2.5 text-interface-labels-xs-normal font-semibold text-text-default-static hover:bg-surface-default-action-hover disabled:cursor-not-allowed disabled:opacity-50", children: match ? "Update" : "Save" })
+          ] })
+        ]
+      }
+    )
   ] });
 });
 var PostgresQueryBox_default = PostgresQueryBox;
+
+// src/core/sql.js
+var OCT = "(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
+var V4 = `(${OCT}\\.){3}${OCT}`;
+var H = "[0-9a-f]{1,4}";
+var V6 = [
+  `(${H}:){7}${H}`,
+  `(${H}:){1,7}:`,
+  `(${H}:){1,6}:${H}`,
+  `(${H}:){1,5}(:${H}){1,2}`,
+  `(${H}:){1,4}(:${H}){1,3}`,
+  `(${H}:){1,3}(:${H}){1,4}`,
+  `(${H}:){1,2}(:${H}){1,5}`,
+  `${H}:(:${H}){1,6}`,
+  `:((:${H}){1,7}|:)`,
+  `(${H}:){6}${V4}`,
+  `(${H}:){1,5}:${V4}`,
+  `::(${H}:){0,5}${V4}`
+];
+var IP_RE = `^(${V4}|${V6.join("|")})$`;
+var NUM_RE = "^-?\\d+(\\.\\d+)?$";
+var SQL_OP = { "==": "=", "!=": "<>", "<": "<", "<=": "<=", ">": ">", ">=": ">=" };
+var str = (s) => {
+  if (s.includes("\0")) throw new Error("Text values cannot contain a NUL character");
+  return "'" + s.replace(/'/g, "''") + "'";
+};
+function toSql(ast, schema) {
+  const segs = (field) => {
+    var _a, _b;
+    return ((_b = (_a = schema == null ? void 0 : schema.byPath) == null ? void 0 : _a[field]) == null ? void 0 : _b.segs) || field.split(".");
+  };
+  const path = (field, last2) => {
+    const s = segs(field).map(str);
+    return `data${s.slice(0, -1).map((k) => `->${k}`).join("")}${last2}${s[s.length - 1]}`;
+  };
+  const json = (field) => `NULLIF(${path(field, "->")},'null'::jsonb)`;
+  const text = (field) => path(field, "->>");
+  const num = (field) => {
+    if (field === "@latency") {
+      const a = path(LAT_A, "->");
+      const b = path(LAT_B, "->");
+      return `(CASE WHEN jsonb_typeof(${a}) = 'number' AND jsonb_typeof(${b}) = 'number' THEN (${a})::numeric - (${b})::numeric END)`;
+    }
+    const t = text(field);
+    return `(CASE WHEN ${t} ~ '${NUM_RE}' THEN (${t})::numeric END)`;
+  };
+  const numLit = (x) => /^-?\d+(\.\d+)?$/.test(x.raw) ? x.raw : String(Number(x.v));
+  const jv = (x) => `to_jsonb(${typeof x.v === "string" ? str(x.v) + "::text" : typeof x.v === "boolean" ? String(x.v) : numLit(x)})`;
+  const ipCond = (field, vals) => {
+    const t = text(field);
+    const v = `(${t})::inet`;
+    const m = `(CASE WHEN ${v}<<='::ffff:0.0.0.0/96' THEN '0.0.0.0'::inet+(${v}-'::ffff:0.0.0.0'::inet) ELSE ${v} END)`;
+    const nets = vals.filter((x) => !x.includes("-"));
+    const tests = vals.filter((x) => x.includes("-")).map((x) => `${m} BETWEEN ${str(x.split("-")[0])}::inet AND ${str(x.split("-")[1])}::inet`);
+    if (nets.length) tests.unshift(`${m}<<=ANY(ARRAY[${nets.map(str).join(",")}]::inet[])`);
+    return `(CASE WHEN ${t}~*'${IP_RE}' THEN ${tests.join(" OR ")} END)`;
+  };
+  const cond = (n) => {
+    const { field, op } = n;
+    if (op === "PRESENT") return `${text(field)} IS NOT NULL`;
+    if (op === "ABSENT") return `${text(field)} IS NULL`;
+    if (op === "BETWEEN") return `${num(field)} BETWEEN ${numLit(n.lo)} AND ${numLit(n.hi)}`;
+    if (op === "ANYONE" || op === "NONEOF") return `${json(field)} ${op === "NONEOF" ? "NOT IN" : "IN"} (${n.vals.map(jv).join(", ")})`;
+    if (op.startsWith("IP")) return `${op === "IP NOT_IN_RANGE" ? "NOT " : ""}${ipCond(field, n.vals.map((x) => x.v))}`;
+    const v = n.val.v;
+    if (op === "CONTAINS") return `strpos(${text(field)}, ${str(v)}) > 0`;
+    if (op === "NOT CONTAINS") return `strpos(${text(field)}, ${str(v)}) = 0`;
+    if (op.includes("~")) return `${text(field)} ${op} ${str(v)}`;
+    if (op === "==" || op === "!=") return `${json(field)} ${SQL_OP[op]} ${jv(n.val)}`;
+    return `${num(field)} ${SQL_OP[op]} ${numLit(n.val)}`;
+  };
+  const one = (n) => {
+    if (n.k === "cond") return cond(n);
+    if (n.k === "group") return `(${one(n.x)})`;
+    if (n.k === "not") return `NOT (${one(n.x)})`;
+    return n.items.map(one).join(` ${n.k.toUpperCase()} `);
+  };
+  if (!ast) return { where: "", count: null };
+  const items = ast.k === "and" ? ast.items : [ast];
+  const last = items[items.length - 1];
+  const c = last.k === "count" ? last : null;
+  const rest = c ? items.slice(0, -1) : items;
+  const where = rest.length ? `(${one(rest.length === 1 ? rest[0] : { k: "and", items: rest })})` : "";
+  const count = c && { op: SQL_OP[c.op], value: c.n, window: c.ms || 0, by: c.by ? segs(c.by) : null };
+  return { where, count };
+}
 
 // src/core/index.js
 var validate = (text, schema) => {
@@ -2185,6 +2547,7 @@ var validate = (text, schema) => {
   parse,
   parseRange,
   schemaFromFields,
+  toSql,
   toTree,
   tokenize,
   validate
