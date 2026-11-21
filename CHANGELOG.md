@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+- Releases are published from GitHub through the Publish workflow, with npm provenance. The README explains the steps.
+- New `typecheck` script, run as part of `npm run check`.
+
 ## 0.1.0
 
 First version.
