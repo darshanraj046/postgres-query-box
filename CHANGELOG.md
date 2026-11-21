@@ -1,13 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- `toSql` turns a query into a Postgres `WHERE` condition for a JSONB column, with `COUNT()` returned separately.
-- Regex is checked against Postgres rules, with a fix from `\b` to `\y`. Text with a NUL character is an error.
-- Saved queries redesigned: Save popover, Edit and Create alert on each row, delete confirmation. New `onUpdateSaved` and `onCreateAlert` props.
-- Suggestions: regex example and syntax cards, threshold examples for status codes, ports and latency, latency `BETWEEN`, operators grouped like the Advanced filter, more one-click fixes.
-- Advanced filter: list values suggest as you type, and changing an operator keeps the existing value.
-
 ## 0.1.0
 
 First version.
@@ -16,5 +8,9 @@ First version.
 - Mistakes are highlighted where they happen, with a plain message and one-click fixes.
 - Long queries are laid out one condition per line while editing.
 - Advanced filter for building queries visually.
-- Saved queries panel driven by your callbacks.
+- Saved queries driven by your callbacks: a Save popover, pinning, Edit and Create alert on each row, and a delete confirmation.
 - Engine available on its own from `postgres-query-box/core`.
+- `toSql` turns a query into a Postgres `WHERE` condition for a JSONB column, with `COUNT()` returned separately.
+- Regex is checked against Postgres rules, with a fix from `\b` to `\y`. Text with a NUL character is an error.
+- Suggestions: regex example and syntax cards, threshold examples for status codes, ports and latency, latency `BETWEEN`, operators grouped like the Advanced filter, more one-click fixes.
+- Advanced filter: list values suggest as you type, and changing an operator keeps the existing value.

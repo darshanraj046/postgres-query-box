@@ -4,6 +4,14 @@
   "description": "A React query box for API transaction logs: field and value suggestions, inline errors with fixes, an Advanced filter builder and saved queries.",
   "license": "MIT",
   "author": "Darshan R",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/darshanraj046/postgres-query-box.git"
+  },
+  "homepage": "https://github.com/darshanraj046/postgres-query-box#readme",
+  "bugs": {
+    "url": "https://github.com/darshanraj046/postgres-query-box/issues"
+  },
   "keywords": [
     "postgres",
     "react",
@@ -53,7 +61,8 @@
     "build": "tsup",
     "css": "node scripts/gen-css.mjs",
     "test": "vitest run",
-    "check": "npm test && npm run build"
+    "check": "npm test && npm run build",
+    "prepublishOnly": "npm run check"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10"
