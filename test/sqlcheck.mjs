@@ -47,15 +47,8 @@ const extra = [
   `${X} IP IN_RANGE "2001:db8::0-2001:db8::ff"`,
   `${X} == "not-an-ip"`,
   `${X} ABSENT`,
-  `COUNT() > 3 WITHIN 1m`,
   `data.request.port < ${'9'.repeat(400)}`
 ]
-
-const strip = (ast) => {
-  if (ast.k === 'count') return null
-  if (ast.k === 'and' && ast.items[ast.items.length - 1].k === 'count') return ast.items.length === 2 ? ast.items[0] : { ...ast, items: ast.items.slice(0, -1) }
-  return ast
-}
 
 const q = (s) => "'" + s.replace(/'/g, "''") + "'"
 const cases = []
@@ -67,10 +60,8 @@ for (const text of [...good, ...extra]) {
     console.log('SKIP (does not parse)', text, a.errors[0].msg)
     continue
   }
-  const { where, count } = toSql(a.ast, schema)
-  const rest = strip(a.ast)
-  const want = (rest ? evaluate(rest, all).rows : all).map((r) => r.id).sort()
-  if (/COUNT\(\)/.test(text) !== !!count) console.log('FAIL count part', text)
+  const { where } = toSql(a.ast, schema)
+  const want = evaluate(a.ast, all).rows.map((r) => r.id).sort()
   cases.push({ text, where, want })
   sql += `\\echo @@${cases.length - 1}\nSELECT coalesce(string_agg(id, ',' ORDER BY id COLLATE "C"), '') FROM t WHERE ${where || 'TRUE'};\n`
 }

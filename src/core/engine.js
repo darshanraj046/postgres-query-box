@@ -8,7 +8,7 @@ export const STATUS_CODES = [100, 101, 102, 103, 200, 201, 202, 203, 204, 205, 2
 const CATALOG = { 'data.request.verb': METHODS, 'data.response.statusCode': STATUS_CODES }
 export const COMMON = ['data.request.verb', 'data.response.statusCode', 'data.request.path', 'data.request.hostname']
 
-const KW = new Set(['AND', 'OR', 'NOT', 'CONTAINS', 'PRESENT', 'ABSENT', 'BETWEEN', 'ANYONE', 'NONEOF', 'IP', 'IN_RANGE', 'NOT_IN_RANGE', 'COUNT', 'WITHIN', 'GROUP', 'BY', 'LATENCY'])
+const KW = new Set(['AND', 'OR', 'NOT', 'CONTAINS', 'PRESENT', 'ABSENT', 'BETWEEN', 'ANYONE', 'NONEOF', 'IP', 'IN_RANGE', 'NOT_IN_RANGE', 'LATENCY'])
 const OPS = ['!~*', '!~', '~*', '==', '!=', '<=', '>=', '~', '<', '>', '=']
 const CMP = new Set(['<', '<=', '>', '>='])
 const REGEX = new Set(['~', '~*', '!~', '!~*'])
@@ -297,7 +297,7 @@ export function tokenize(src) {
       continue
     }
     const prev = out[out.length - 1]
-    const neg = c === '-' && /\d/.test(src[i + 1] || '') && prev && (prev.t === 'op' || (prev.t === 'punct' && prev.v !== ')') || (prev.t === 'kw' && prev.v !== 'COUNT'))
+    const neg = c === '-' && /\d/.test(src[i + 1] || '') && prev && (prev.t === 'op' || (prev.t === 'punct' && prev.v !== ')') || prev.t === 'kw')
     if (/\d/.test(c) || neg) {
       const m = src.slice(i).match(/^-?\d+(?:\.\d+)?/)[0]
       i += m.length
@@ -543,53 +543,6 @@ export function parse(src, schema) {
     return node
   }
 
-  const countClause = () => {
-    const t = peek()
-    role(t, 'fn')
-    p++
-    if (!isP(peek(), '(') || !isP(peek(1), ')')) fail(peek(), 'Write COUNT()')
-    role(peek(), 'fn')
-    role(peek(1), 'fn')
-    p += 2
-    const o = peek()
-    if (!o || o.t !== 'op' || REGEX.has(o.v) || o.v === '!=') fail(o, 'COUNT() takes >, <, >=, <= or ==', o?.t === 'num' ? { fix: { s: o.s, e: o.s, text: '> ', verb: 'Add', label: '>' } } : undefined)
-    role(o, 'op')
-    p++
-    const n = peek()
-    if (!n || n.t !== 'num') fail(n, 'COUNT() needs a number, like COUNT() > 50')
-    role(n, 'num')
-    p++
-    const node = { k: 'count', op: o.v === '=' ? '==' : o.v, n: n.v, s: t.s, e: n.e }
-    if (isKw(peek(), 'WITHIN')) {
-      role(peek(), 'kw')
-      p++
-      const d = peek()
-      if (d && d.t === 'num') fail(d, `Add a unit: ${d.raw}s, ${d.raw}m, ${d.raw}h or ${d.raw}d`, { fix: ['s', 'm', 'h', 'd'].map((u) => ({ s: d.s, e: d.e, text: d.raw + u, verb: 'Use', label: d.raw + u })) })
-      if (!d || d.t !== 'dur') fail(d, 'WITHIN takes a window like 5m')
-      role(d, 'num')
-      p++
-      node.within = d.v
-      node.ms = d.ms
-      node.e = d.e
-    }
-    if (isKw(peek(), 'GROUP')) {
-      role(peek(), 'kw')
-      p++
-      if (!isKw(peek(), 'BY')) fail(peek(), 'Write GROUP BY')
-      role(peek(), 'kw')
-      p++
-      const g = peek()
-      if (!g || g.t !== 'word') fail(g, 'GROUP BY needs a field')
-      role(g, 'field')
-      p++
-      const by = g.v.replace(/\\\./g, '.')
-      if (!schema.byPath[by]) errors.push({ s: g.s, e: g.e, msg: `${g.v} is not a field in this index`, near: near(g.v, schema) })
-      node.by = by
-      node.e = g.e
-    }
-    return node
-  }
-
   const primary = () => {
     const t = peek()
     if (!t) fail(null, 'Add a condition')
@@ -608,7 +561,6 @@ export function parse(src, schema) {
       p++
       return { k: 'group', x, s: t.s, e: c.e }
     }
-    if (isKw(t, 'COUNT')) return countClause()
     return condition()
   }
 
@@ -658,17 +610,6 @@ export function parse(src, schema) {
       }
     }
   }
-  if (ast) {
-    const counts = []
-    const walk = (n, top) => {
-      if (n.k === 'count') counts.push({ n, top })
-      if (n.items) n.items.forEach((x, i) => walk(x, n === ast && n.k === 'and' && i === n.items.length - 1))
-      if (n.x) walk(n.x, false)
-    }
-    walk(ast, ast.k === 'count')
-    if (counts.length > 1) counts.slice(1).forEach(({ n }) => errors.push({ s: n.s, e: n.e, msg: 'Only one COUNT() per query' }))
-    else if (counts.length === 1 && !counts[0].top) errors.push({ s: counts[0].n.s, e: counts[0].n.e, msg: 'COUNT() goes last, joined with AND' })
-  }
   const all = syntax ? [syntax, ...errors] : errors
   all.sort((a, b) => a.s - b.s)
   return { ast, errors: all, toks }
@@ -685,7 +626,6 @@ export function format(ast, name, pretty) {
       if (n.vals) return `${head} ${n.vals[0].raw}`
       return `${head} ${n.val.raw}`
     }
-    if (n.k === 'count') return `COUNT() ${n.op} ${n.n}${n.within ? ' WITHIN ' + n.within : ''}${n.by ? ' GROUP BY ' + f(n.by) : ''}`
     const ind = (k) => '\n' + '  '.repeat(k)
     if (n.k === 'group') return pretty && n.x.items ? `(${ind(d + 1)}${one(n.x, d + 1)}${ind(d)})` : `(${one(n.x, d)})`
     if (n.k === 'not') return `NOT ${one(n.x, d)}`
@@ -745,7 +685,6 @@ function test(n, row) {
     }
     return unknown ? null : false
   }
-  if (n.k === 'count') return true
   let v
   if (n.field === '@latency') {
     const a = get(row, LAT_A)
@@ -789,25 +728,8 @@ function test(n, row) {
   return n.op === '<' ? x < y : n.op === '<=' ? x <= y : n.op === '>' ? x > y : x >= y
 }
 
-const cmp = (a, op, b) => (op === '>' ? a > b : op === '<' ? a < b : op === '>=' ? a >= b : op === '<=' ? a <= b : a === b)
-
 export function evaluate(ast, rows) {
-  if (!ast) return { rows, count: null }
-  const count = ast.k === 'count' ? ast : ast.k === 'and' && ast.items[ast.items.length - 1].k === 'count' ? ast.items[ast.items.length - 1] : null
-  const hit = rows.filter((r) => test(ast, r) === true)
-  if (!count) return { rows: hit, count: null }
-  const buckets = new Map()
-  for (const r of hit) {
-    const key = count.by ? get(r, count.by) : '*'
-    if (key === undefined || key === null) continue
-    const win = count.ms ? Math.floor(r.metadata.requestTimestamp / count.ms) * count.ms : 0
-    const id = key + '\u0000' + win
-    let b = buckets.get(id)
-    if (!b) buckets.set(id, (b = { key, win, rows: [] }))
-    b.rows.push(r)
-  }
-  const pass = [...buckets.values()].filter((b) => cmp(b.rows.length, count.op, count.n)).sort((a, b) => b.rows.length - a.rows.length)
-  return { rows: pass.flatMap((b) => b.rows).sort((a, b) => b.metadata.requestTimestamp - a.metadata.requestTimestamp), count: { node: count, groups: pass, buckets: buckets.size, filtered: hit.length } }
+  return { rows: ast ? rows.filter((r) => test(ast, r) === true) : rows }
 }
 
 export function context(src, caret, schema) {
@@ -821,7 +743,6 @@ export function context(src, caret, schema) {
   let field = null
   let op = null
   let between = false
-  let hasCount = /\bCOUNT\s*\(/i.test(src.slice(caret))
   let used = []
   let inList = false
   let opTok = null
@@ -829,11 +750,9 @@ export function context(src, caret, schema) {
   for (let i = 0; i < toks.length; i++) {
     const t = toks[i]
     const kw = t.t === 'kw' ? t.v : null
-    if (kw === 'COUNT') hasCount = true
     if (st === 'term') {
       if (kw === 'NOT') continue
       if (t.v === '(' && t.t === 'punct') depth++
-      else if (kw === 'COUNT') st = 'countParen'
       else if (kw === 'LATENCY') (field = LAT_FIELD), (st = 'op')
       else if (t.t === 'word') (field = schema.byPath[t.v.replace(/\\\./g, '.')] || { path: t.v, type: null }), (st = 'op')
       else st = 'bad'
@@ -867,15 +786,7 @@ export function context(src, caret, schema) {
       if (kw === 'AND' || kw === 'OR') (st = 'term'), (field = null), (op = null), (eq = null)
       else if (t.v === ')' && t.t === 'punct') depth = Math.max(0, depth - 1)
       else st = 'bad'
-    } else if (st === 'countParen') st = t.v === '(' ? 'countParen2' : 'bad'
-    else if (st === 'countParen2') st = t.v === ')' ? 'countOp' : 'bad'
-    else if (st === 'countOp') st = t.t === 'op' ? 'countN' : 'bad'
-    else if (st === 'countN') st = t.t === 'num' ? 'countAfter' : 'bad'
-    else if (st === 'countAfter') st = kw === 'WITHIN' ? 'dur' : kw === 'GROUP' ? 'by' : 'bad'
-    else if (st === 'dur') st = t.t === 'dur' ? 'countAfter2' : 'bad'
-    else if (st === 'countAfter2') st = kw === 'GROUP' ? 'by' : 'bad'
-    else if (st === 'by') st = kw === 'BY' ? 'groupField' : 'bad'
-    else if (st === 'groupField') st = t.t === 'word' ? 'end' : 'bad'
+    }
   }
   let to = caret
   const tail = src.slice(caret).match(/^(?:[A-Za-z0-9_.-]|\\\.)+/)
@@ -891,19 +802,15 @@ export function context(src, caret, schema) {
   const res = (kind, title, items, extra) => ({ kind, title, items, from, to, q, ...extra })
   const kws = (list, title) => res('kw', title, list.filter((x) => !q || x.label.toLowerCase().startsWith(q) || x.label.toLowerCase().includes(' ' + q)))
 
-  if (st === 'term' || st === 'groupField') {
+  if (st === 'term') {
     const items = []
     const match = (s) => !q || s.toLowerCase().includes(q)
-    for (const f of schema.fields) if (match(f.path)) items.push({ kind: 'field', label: f.path, insert: f.path + ' ', type: f.type, count: f.count, group: f.group, reopen: st === 'term' })
-    if (st === 'term') {
-      const at = items.findIndex((x) => x.group !== 'Common')
-      if (match('latency') || match(LATENCY)) items.splice(at < 0 ? items.length : at, 0, { kind: 'field', label: LATENCY, sub: 'latency in ms', insert: LATENCY + ' ', type: 'latency', group: 'Common', reopen: true })
-      const prev = toks[toks.length - 1]
-      if (!hasCount && depth === 0 && (!prev || (prev.t === 'kw' && prev.v === 'AND')) && match('count()')) items.push({ kind: 'fn', label: 'COUNT()', sub: 'number of matching calls, e.g. COUNT() > 50 WITHIN 5m', insert: 'COUNT() ', group: 'Functions', reopen: true, pin: true })
-      if (match('not')) items.push({ kind: 'kw', label: 'NOT', sub: 'exclude matching calls, e.g. NOT data.request.verb == "GET"', insert: 'NOT ', group: 'Logic', reopen: true, pin: true })
-      if (!q) items.push({ kind: 'kw', label: '(', sub: 'start a group', insert: '(', group: 'Logic', reopen: true, pin: true })
-    }
-    return res('fields', st === 'term' ? 'Fields' : 'Group by', items, { total: schema.fields.length })
+    for (const f of schema.fields) if (match(f.path)) items.push({ kind: 'field', label: f.path, insert: f.path + ' ', type: f.type, count: f.count, group: f.group, reopen: true })
+    const at = items.findIndex((x) => x.group !== 'Common')
+    if (match('latency') || match(LATENCY)) items.splice(at < 0 ? items.length : at, 0, { kind: 'field', label: LATENCY, sub: 'latency in ms', insert: LATENCY + ' ', type: 'latency', group: 'Common', reopen: true })
+    if (match('not')) items.push({ kind: 'kw', label: 'NOT', sub: 'exclude matching calls, e.g. NOT data.request.verb == "GET"', insert: 'NOT ', group: 'Logic', reopen: true, pin: true })
+    if (!q) items.push({ kind: 'kw', label: '(', sub: 'start a group', insert: '(', group: 'Logic', reopen: true, pin: true })
+    return res('fields', 'Fields', items, { total: schema.fields.length })
   }
   if (st === 'op') {
     if (!field || !field.type) return null
@@ -997,20 +904,10 @@ export function context(src, caret, schema) {
       items.push({ kind: 'kw', label: 'OR', sub: 'either can match, e.g. OR data.request.verb == "PUT"', insert: pad + 'OR ', reopen: true })
       items.push({ kind: 'kw', label: 'AND NOT', sub: 'exclude matching calls, e.g. AND NOT data.request.path CONTAINS "/health"', insert: pad + 'AND NOT ', reopen: true })
       if (depth > 0) items.push({ kind: 'kw', label: ')', sub: 'close the group, e.g. (A OR B) AND C', insert: ') ', trim: true, reopen: true })
-      if (!hasCount && depth === 0) items.push({ kind: 'fn', label: 'AND COUNT()', sub: 'number of matching calls, e.g. AND COUNT() > 50 WITHIN 5m', insert: pad + 'AND COUNT() ', reopen: true })
     }
     if (st === 'joiner' && eq && catalog && !q) return res('kw', 'Combine', [...another(eq), ...items.map((x) => ({ ...x, group: 'Join conditions', pin: true }))])
     return kws(items, 'Combine')
   }
-  if (st === 'countOp') return kws(['>', '>=', '<', '<=', '=='].map((o) => ({ kind: 'op', label: o, sub: OP_INFO[o], insert: o + ' ' })), 'COUNT()')
-  if (st === 'countAfter' || st === 'countAfter2') {
-    const items = []
-    if (st === 'countAfter') items.push({ kind: 'kw', label: 'WITHIN', sub: 'window, defaults to the time range', insert: pad + 'WITHIN ', reopen: true })
-    items.push({ kind: 'kw', label: 'GROUP BY', sub: 'count each value on its own', insert: pad + 'GROUP BY ', reopen: true })
-    return kws(items, 'COUNT()')
-  }
-  if (st === 'dur') return kws(['1m', '5m', '10m', '15m', '1h', '1d'].map((d) => ({ kind: 'value', label: d, insert: d + ' ', reopen: true })), 'Window')
-  if (st === 'by') return kws([{ kind: 'kw', label: 'BY', insert: 'BY ', reopen: true }], 'COUNT()')
   return null
 }
 
@@ -1048,7 +945,7 @@ export const isComplete = (c) => {
 export const newCond = () => ({ kind: 'cond', id: nid(), field: '', op: '==', values: [], ci: false, not: false })
 
 export function toTree(ast) {
-  const root = { kind: 'group', id: nid(), join: 'AND', not: false, items: [], count: null }
+  const root = { kind: 'group', id: nid(), join: 'AND', not: false, items: [] }
   if (!ast) return root
   const node = (n, not = false) => {
     if (n.k === 'not') return node(n.x, !not)
@@ -1064,15 +961,9 @@ export function toTree(ast) {
     }
     return { kind: 'cond', id: nid(), field: n.field, op, values, ci, not }
   }
-  const top = ast.k === 'and' ? ast.items : [ast]
-  const rest = []
-  for (const n of top) {
-    if (n.k === 'count') root.count = { op: n.op, n: String(n.n), within: n.within || '', by: n.by || '' }
-    else rest.push(n)
-  }
-  if (ast.k === 'and') root.items = rest.map((x) => node(x))
-  else if (rest.length) {
-    const one = node(rest[0])
+  if (ast.k === 'and') root.items = ast.items.map((x) => node(x))
+  else {
+    const one = node(ast)
     if (one.kind === 'group' && !one.not) (root.join = one.join), (root.items = one.items)
     else root.items = [one]
   }
@@ -1108,11 +999,5 @@ export function fromTree(root, schema) {
     if (parts.length === 1) return g.not ? `NOT ${body.startsWith('NOT ') ? `(${body})` : body}` : body
     return `${g.not ? 'NOT ' : ''}(${body})`
   }
-  let t = group(root, true)
-  const c = root.count
-  if (c && String(c.n).trim()) {
-    const cnt = `COUNT() ${c.op} ${String(c.n).trim()}${c.within.trim() ? ` WITHIN ${c.within.trim()}` : ''}${c.by ? ` GROUP BY ${c.by}` : ''}`
-    t = t ? `${root.items.some((x, i) => i && (x.j || root.join) === 'OR') && root.items.filter((x) => x.kind === 'group' || isComplete(x)).length > 1 ? `(${t})` : t} AND ${cnt}` : cnt
-  }
-  return t
+  return group(root, true)
 }

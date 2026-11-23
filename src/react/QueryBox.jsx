@@ -4,7 +4,7 @@ import { context, parse, format } from '../core/engine.js'
 import Builder from './Builder.jsx'
 import { valueStyle } from './colors.js'
 
-const ROLE = { field: 'text-base-blue-1100', op: 'text-text-color-purple', kw: 'font-semibold text-text-color-purple', str: 'text-text-color-success', num: 'text-text-color-cyan', bool: 'text-text-color-orange', fn: 'font-semibold text-text-color-purple', punct: 'text-text-default-subtle' }
+const ROLE = { field: 'text-base-blue-1100', op: 'text-text-color-purple', kw: 'font-semibold text-text-color-purple', str: 'text-text-color-success', num: 'text-text-color-cyan', bool: 'text-text-color-orange', punct: 'text-text-default-subtle' }
 const DEFAULT = { kw: ROLE.kw, str: ROLE.str, num: ROLE.num, dur: ROLE.num, bool: ROLE.bool, op: ROLE.op, word: ROLE.field }
 const cls = (t) => (t.role === 'op' && t.t === 'op' ? 'text-text-default-subdued' : ROLE[t.role] || DEFAULT[t.t] || '')
 const TYPE_ICON = { string: TextT, numtext: TextT, number: Hash, boolean: ToggleLeft, ip: Globe, latency: Timer }
@@ -347,7 +347,7 @@ export default function QueryBox({ text, setText, schema, onRun, tools, actions,
               {it.count !== undefined && <span className="w-9 shrink-0 text-right text-interface-labels-xs-normal text-text-default-subtle">{kfmt(it.count)}</span>}
             </>
           )}
-          {(it.kind === 'op' || it.kind === 'kw' || it.kind === 'fn') && (
+          {(it.kind === 'op' || it.kind === 'kw') && (
             <>
               <span className={`shrink-0 font-mono text-code-editor-small font-semibold ${it.num ? ROLE.num : it.str ? ROLE.str : 'text-text-color-purple'}`}>{it.label}</span>
               {it.sub && <span className="ml-auto min-w-0 truncate text-interface-body-s-normal text-text-default-subdued">{it.sub}</span>}

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Removed `COUNT()`, with its `WITHIN` and `GROUP BY`. The query language, suggestions and Advanced filter no longer have it. `toSql` returns `{ where }` only, and `evaluate` returns `{ rows }` only.
+
 ## 0.1.1
 
 - Releases are published from GitHub through the Publish workflow, with npm provenance. The README explains the steps.

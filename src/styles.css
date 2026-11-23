@@ -48,7 +48,6 @@
 .pqb .mt-0\.5{margin-top:calc(var(--spacing) * .5)}
 .pqb .mt-1{margin-top:calc(var(--spacing) * 1)}
 .pqb .mt-1\.5{margin-top:calc(var(--spacing) * 1.5)}
-.pqb .mt-2{margin-top:calc(var(--spacing) * 2)}
 .pqb .mt-2\.5{margin-top:calc(var(--spacing) * 2.5)}
 .pqb .mt-\[3px\]{margin-top:3px}
 .pqb .mr-0\.5{margin-right:calc(var(--spacing) * .5)}
@@ -103,7 +102,6 @@
 .pqb .w-8{width:calc(var(--spacing) * 8)}
 .pqb .w-9{width:calc(var(--spacing) * 9)}
 .pqb .w-14{width:calc(var(--spacing) * 14)}
-.pqb .w-16{width:calc(var(--spacing) * 16)}
 .pqb .w-24{width:calc(var(--spacing) * 24)}
 .pqb .w-\[15px\]{width:15px}
 .pqb .w-\[72px\]{width:72px}

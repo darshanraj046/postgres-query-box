@@ -77,12 +77,5 @@ export function toSql(ast, schema) {
     return n.items.map(one).join(` ${n.k.toUpperCase()} `)
   }
 
-  if (!ast) return { where: '', count: null }
-  const items = ast.k === 'and' ? ast.items : [ast]
-  const last = items[items.length - 1]
-  const c = last.k === 'count' ? last : null
-  const rest = c ? items.slice(0, -1) : items
-  const where = rest.length ? `(${one(rest.length === 1 ? rest[0] : { k: 'and', items: rest })})` : ''
-  const count = c && { op: SQL_OP[c.op], value: c.n, window: c.ms || 0, by: c.by ? segs(c.by) : null }
-  return { where, count }
+  return { where: ast ? `(${one(ast)})` : '' }
 }

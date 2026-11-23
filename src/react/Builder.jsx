@@ -527,41 +527,12 @@ function Group({ group, depth, schema, errors, onRoot, parentJoin }) {
   )
 }
 
-function CountRow({ count, schema, onChange, onRemove }) {
-  const set = (patch) => onChange({ ...count, ...patch })
-  return (
-    <div className="group/row mt-2 flex flex-wrap items-start gap-1.5 border-t border-stroke-subsection pl-6 pt-2">
-      <span className="mt-[3px] flex h-[22px] items-center rounded bg-surface-color-blue-default-subtle px-1.5 font-mono text-code-editor-small font-semibold text-text-color-purple">COUNT()</span>
-      <select value={count.op} onChange={(e) => set({ op: e.target.value })} className={`${INPUT} w-16`}>
-        {['>', '>=', '<', '<=', '=='].map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
-      </select>
-      <input value={count.n} onChange={(e) => set({ n: e.target.value })} inputMode="numeric" placeholder="Number" className={`${INPUT} w-24`} />
-      <span className="flex h-7 items-center text-interface-body-s-normal text-text-default-subtle">within</span>
-      <input value={count.within} onChange={(e) => set({ within: e.target.value })} placeholder="time range" className={`${INPUT} w-24`} />
-      <span className="flex h-7 items-center text-interface-body-s-normal text-text-default-subtle">group by</span>
-      <FieldPicker value={count.by} schema={schema} placeholder="Whole result" onPick={(f) => set({ by: f === '@latency' ? '' : f })} />
-      {count.by && (
-        <button onClick={() => set({ by: '' })} data-pqb-tip="Count the whole result" aria-label="Remove group by" className={ACT}>
-          <P.X size={12} />
-        </button>
-      )}
-      <button onClick={onRemove} data-pqb-tip="Remove COUNT()" aria-label="Remove COUNT()" className={`${ACT} hover:text-text-color-red`}>
-        <P.Trash size={14} />
-      </button>
-    </div>
-  )
-}
-
 export default function Builder({ text, schema, onApply, onCancel }) {
   const start = useMemo(() => {
     const p = parse(text, schema)
     const ok = text.trim() && !p.errors.length
     const tree = toTree(ok ? p.ast : null)
-    if (!tree.items.length && !tree.count) tree.items = [newCond()]
+    if (!tree.items.length) tree.items = [newCond()]
     return { tree, replaced: !!text.trim() && !ok }
   }, [])
   const [root, setRoot] = useState(start.tree)
@@ -574,7 +545,6 @@ export default function Builder({ text, schema, onApply, onCancel }) {
     let n = 0
     const walk = (g) => g.items.forEach((x) => (x.kind === 'group' ? walk(x) : x.field && !isComplete(x) && n++))
     walk(root)
-    if (root.count && !String(root.count.n).trim()) n++
     return n
   }, [root])
   const error = parsed?.errors[0]?.msg
@@ -584,13 +554,6 @@ export default function Builder({ text, schema, onApply, onCancel }) {
       <div className="max-h-[380px] min-h-[96px] overflow-auto scroll-thin bg-surface-default-l1 px-3 pb-2 pt-3">
         {start.replaced && <p className="mb-2 text-interface-labels-xs-light text-text-default-subdued">The query in the bar has an error, so the builder starts empty. Apply replaces it.</p>}
         <Group group={root} depth={0} schema={schema} errors={new Map()} onRoot={onRoot} />
-        {root.count ? (
-          <CountRow count={root.count} schema={schema} onChange={(c) => setRoot({ ...root, count: c })} onRemove={() => setRoot({ ...root, count: null })} />
-        ) : (
-          <button onClick={() => setRoot({ ...root, count: { op: '>', n: '', within: '', by: '' } })} className="mt-1 h-6 rounded px-1.5 text-interface-labels-xs-normal text-text-color-blue hover:bg-surface-hover-l1-hover">
-            Add COUNT() threshold
-          </button>
-        )}
       </div>
       {show && <div className="border-t border-stroke-subsection px-3 py-2">
         <pre style={{ maxHeight: 200 }} className="overflow-auto scroll-thin whitespace-pre-wrap break-all font-mono text-code-editor-small leading-5 text-text-default-subdued">{clean ? paint(parsed && !parsed.errors.length ? format(parsed.ast, null, true) : clean, schema) : 'No filter'}</pre>

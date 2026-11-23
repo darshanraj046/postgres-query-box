@@ -106,9 +106,8 @@ A saved query is `{ id, name, query, pinned }`. Clicking one loads it into the b
 | Field exists | `data.request.headerParams.x-apikey PRESENT`, `... ABSENT` |
 | Latency in ms | `(metadata.responseTimestamp - metadata.requestTimestamp) > 2000` |
 | IP address | `metadata.clientIp IP IN_RANGE "10.0.0.0/8"`, `... NOT_IN_RANGE ["10.0.0.0/8", "192.168.0.0/16"]` |
-| Count | `data.response.statusCode == "401" AND COUNT() > 20 WITHIN 5m GROUP BY metadata.clientIp` |
 
-Join conditions with `AND`, `OR` and `NOT`, and group them with brackets. `AND` binds tighter than `OR`, as in SQL. `COUNT()` goes last.
+Join conditions with `AND`, `OR` and `NOT`, and group them with brackets. `AND` binds tighter than `OR`, as in SQL.
 
 ## What the box gives you, and what it does not
 
@@ -121,7 +120,7 @@ Join conditions with `AND`, `OR` and `NOT`, and group them with brackets. `AND` 
 ```js
 import { parse, toSql } from 'postgres-query-box/core'
 
-const { where, count } = toSql(parse(text, schema).ast, schema)
+const { where } = toSql(parse(text, schema).ast, schema)
 // where: "(NULLIF(data -> 'data' -> 'request' -> 'verb', 'null'::jsonb) = to_jsonb('GET'::text) AND ...)"
 ```
 
@@ -136,7 +135,6 @@ The box checks everything Postgres would reject, so a query it accepts does not 
 - Regex follows Postgres rules. The box shows an error for patterns Postgres rejects, such as named groups `(?<name>...)`, `\p{L}`, `[^]`, repeats over 255 or patterns too large to compile. It also flags patterns Postgres reads differently from JavaScript. For example, `\b` is a backspace in Postgres, so the box offers `\y` for a word boundary.
 - Text with a hidden NUL character shows an error, because Postgres text cannot hold one. `toSql` throws if it is given one.
 - Very long numbers are passed through as typed, so they never overflow.
-- `COUNT()` cannot go into a `WHERE`, so it comes back as data for your server to apply. When the query has one, `count` holds `op` (`=`, `>`, `>=`, `<` or `<=`), `value`, `window` (the `WITHIN` window in milliseconds, 0 when there is none) and `by` (the `GROUP BY` field as a list of keys, or `null`). Without `COUNT()`, `count` is `null`. The rows a server should return are the ones in each group and window whose count passes, which is what `evaluate` does.
 
 `toSql` and `evaluate` give the same rows. `test/sqlcheck.mjs` checks this against a real Postgres, and also checks that 5,000 random regexes the box accepts all compile there. It needs `psql` on your path and the usual `PG*` connection settings, and it only creates a temporary table.
 

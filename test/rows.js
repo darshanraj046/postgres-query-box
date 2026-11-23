@@ -163,10 +163,10 @@ export const SAVED = [
   { id: 's2', name: 'Slow calls (over 2 s)', pinned: true, query: '(metadata.responseTimestamp - metadata.requestTimestamp) > 2000' },
   { id: 's3', name: 'Security preferences', pinned: true, query: 'data.request.path == "/api/v1/security/preferences"' },
   { id: 's4', name: 'Failed writes on devices, no probes', query: '(data.request.verb == "POST" OR data.request.verb ANYONE ["PUT", "PATCH"])\nAND (data.request.path ~ "^/api/v1/devices/.*" OR data.request.path CONTAINS "/telemetry")\nAND (data.response.statusCode >= 500 OR data.response.statusCode ANYONE ["408", "429"])\nAND NOT (data.request.headerParams.user-agent CONTAINS "healthcheck" OR data.request.path ~ "/(health|ping|ready)$")' },
-  { id: 's5', name: 'Brute force: repeated 401s from one IP', query: 'data.response.statusCode == "401"\nAND COUNT() > 20 WITHIN 5m GROUP BY data.request.headerParams.x-envoy-external-address' },
+  { id: 's5', name: 'Unauthorized calls', query: 'data.response.statusCode == "401"' },
   { id: 's6', name: 'External callers writing from outside internal ranges', query: 'metadata.clientIp IP NOT_IN_RANGE ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]\nAND (data.request.verb ANYONE ["POST", "PUT", "DELETE"] OR (data.request.verb == "PATCH" AND data.request.path ~ "/holds$"))' },
   { id: 's7', name: 'No API key but still succeeded', query: 'data.request.headerParams.x-apikey ABSENT\nAND data.response.statusCode BETWEEN 200 AND 299\nAND NOT (data.request.path CONTAINS "/public" OR data.request.path CONTAINS "/health")' },
   { id: 's8', name: 'Slow failures without payload capture', query: 'metadata.capturePayload == false\nAND data.response.statusCode ANYONE ["500", "502", "503", "504"]\nAND (metadata.responseTimestamp - metadata.requestTimestamp) >= 1000' },
-  { id: 's9', name: 'Error spike on one host', query: 'data.request.hostname CONTAINS "dev-api"\nAND data.response.statusCode >= 500\nAND COUNT() > 100 WITHIN 10m' },
+  { id: 's9', name: 'Server errors on one host', query: 'data.request.hostname CONTAINS "dev-api"\nAND data.response.statusCode >= 500' },
   { id: 's10', name: 'checkout-app service, invalid session', query: 'metadata.additionalMetadata.service.name == "checkout-app"\nAND data.response.responseBody CONTAINS "Invalid Session Token"' }
 ]

@@ -23,7 +23,7 @@ import {
   toTree,
   tokenize,
   validate
-} from "./chunk-VMCU5JEN.js";
+} from "./chunk-DPPSJ2RL.js";
 
 // src/react/PostgresQueryBox.jsx
 import { forwardRef, useEffect as useEffect4, useImperativeHandle, useRef as useRef4, useState as useState4 } from "react";
@@ -498,27 +498,13 @@ function Group({ group, depth, schema, errors, onRoot, parentJoin }) {
     }), "aria-label": "Add a condition", "data-pqb-tip": "Add a condition", className: "ml-[1px] grid h-[15px] w-[15px] place-items-center rounded-full border border-stroke-section bg-surface-default-l1 text-icon-subtle hover:border-stroke-active hover:text-text-color-blue", children: /* @__PURE__ */ jsx(P.Plus, { size: 9, weight: "bold" }) }) })
   ] });
 }
-function CountRow({ count, schema, onChange, onRemove }) {
-  const set = (patch) => onChange({ ...count, ...patch });
-  return /* @__PURE__ */ jsxs("div", { className: "group/row mt-2 flex flex-wrap items-start gap-1.5 border-t border-stroke-subsection pl-6 pt-2", children: [
-    /* @__PURE__ */ jsx("span", { className: "mt-[3px] flex h-[22px] items-center rounded bg-surface-color-blue-default-subtle px-1.5 font-mono text-code-editor-small font-semibold text-text-color-purple", children: "COUNT()" }),
-    /* @__PURE__ */ jsx("select", { value: count.op, onChange: (e) => set({ op: e.target.value }), className: `${INPUT} w-16`, children: [">", ">=", "<", "<=", "=="].map((o) => /* @__PURE__ */ jsx("option", { value: o, children: o }, o)) }),
-    /* @__PURE__ */ jsx("input", { value: count.n, onChange: (e) => set({ n: e.target.value }), inputMode: "numeric", placeholder: "Number", className: `${INPUT} w-24` }),
-    /* @__PURE__ */ jsx("span", { className: "flex h-7 items-center text-interface-body-s-normal text-text-default-subtle", children: "within" }),
-    /* @__PURE__ */ jsx("input", { value: count.within, onChange: (e) => set({ within: e.target.value }), placeholder: "time range", className: `${INPUT} w-24` }),
-    /* @__PURE__ */ jsx("span", { className: "flex h-7 items-center text-interface-body-s-normal text-text-default-subtle", children: "group by" }),
-    /* @__PURE__ */ jsx(FieldPicker, { value: count.by, schema, placeholder: "Whole result", onPick: (f) => set({ by: f === "@latency" ? "" : f }) }),
-    count.by && /* @__PURE__ */ jsx("button", { onClick: () => set({ by: "" }), "data-pqb-tip": "Count the whole result", "aria-label": "Remove group by", className: ACT, children: /* @__PURE__ */ jsx(P.X, { size: 12 }) }),
-    /* @__PURE__ */ jsx("button", { onClick: onRemove, "data-pqb-tip": "Remove COUNT()", "aria-label": "Remove COUNT()", className: `${ACT} hover:text-text-color-red`, children: /* @__PURE__ */ jsx(P.Trash, { size: 14 }) })
-  ] });
-}
 function Builder({ text, schema, onApply, onCancel }) {
   var _a;
   const start = useMemo(() => {
     const p = parse(text, schema);
     const ok = text.trim() && !p.errors.length;
     const tree = toTree(ok ? p.ast : null);
-    if (!tree.items.length && !tree.count) tree.items = [newCond()];
+    if (!tree.items.length) tree.items = [newCond()];
     return { tree, replaced: !!text.trim() && !ok };
   }, []);
   const [root, setRoot] = useState(start.tree);
@@ -531,7 +517,6 @@ function Builder({ text, schema, onApply, onCancel }) {
     let n = 0;
     const walk = (g) => g.items.forEach((x) => x.kind === "group" ? walk(x) : x.field && !isComplete(x) && n++);
     walk(root);
-    if (root.count && !String(root.count.n).trim()) n++;
     return n;
   }, [root]);
   const error = (_a = parsed == null ? void 0 : parsed.errors[0]) == null ? void 0 : _a.msg;
@@ -539,8 +524,7 @@ function Builder({ text, schema, onApply, onCancel }) {
   return /* @__PURE__ */ jsxs("div", { className: "border-t border-stroke-subsection", onMouseDown: (e) => e.stopPropagation(), children: [
     /* @__PURE__ */ jsxs("div", { className: "max-h-[380px] min-h-[96px] overflow-auto scroll-thin bg-surface-default-l1 px-3 pb-2 pt-3", children: [
       start.replaced && /* @__PURE__ */ jsx("p", { className: "mb-2 text-interface-labels-xs-light text-text-default-subdued", children: "The query in the bar has an error, so the builder starts empty. Apply replaces it." }),
-      /* @__PURE__ */ jsx(Group, { group: root, depth: 0, schema, errors: /* @__PURE__ */ new Map(), onRoot }),
-      root.count ? /* @__PURE__ */ jsx(CountRow, { count: root.count, schema, onChange: (c) => setRoot({ ...root, count: c }), onRemove: () => setRoot({ ...root, count: null }) }) : /* @__PURE__ */ jsx("button", { onClick: () => setRoot({ ...root, count: { op: ">", n: "", within: "", by: "" } }), className: "mt-1 h-6 rounded px-1.5 text-interface-labels-xs-normal text-text-color-blue hover:bg-surface-hover-l1-hover", children: "Add COUNT() threshold" })
+      /* @__PURE__ */ jsx(Group, { group: root, depth: 0, schema, errors: /* @__PURE__ */ new Map(), onRoot })
     ] }),
     show && /* @__PURE__ */ jsx("div", { className: "border-t border-stroke-subsection px-3 py-2", children: /* @__PURE__ */ jsx("pre", { style: { maxHeight: 200 }, className: "overflow-auto scroll-thin whitespace-pre-wrap break-all font-mono text-code-editor-small leading-5 text-text-default-subdued", children: clean ? paint(parsed && !parsed.errors.length ? format(parsed.ast, null, true) : clean, schema) : "No filter" }) }),
     /* @__PURE__ */ jsxs("div", { className: "flex items-center gap-2 border-t border-stroke-subsection px-3 py-2", children: [
@@ -561,7 +545,7 @@ function Builder({ text, schema, onApply, onCancel }) {
 
 // src/react/QueryBox.jsx
 import { Fragment as Fragment2, jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
-var ROLE = { field: "text-base-blue-1100", op: "text-text-color-purple", kw: "font-semibold text-text-color-purple", str: "text-text-color-success", num: "text-text-color-cyan", bool: "text-text-color-orange", fn: "font-semibold text-text-color-purple", punct: "text-text-default-subtle" };
+var ROLE = { field: "text-base-blue-1100", op: "text-text-color-purple", kw: "font-semibold text-text-color-purple", str: "text-text-color-success", num: "text-text-color-cyan", bool: "text-text-color-orange", punct: "text-text-default-subtle" };
 var DEFAULT = { kw: ROLE.kw, str: ROLE.str, num: ROLE.num, dur: ROLE.num, bool: ROLE.bool, op: ROLE.op, word: ROLE.field };
 var cls = (t) => t.role === "op" && t.t === "op" ? "text-text-default-subdued" : ROLE[t.role] || DEFAULT[t.t] || "";
 var TYPE_ICON2 = { string: TextT2, numtext: TextT2, number: Hash2, boolean: ToggleLeft2, ip: Globe2, latency: Timer2 };
@@ -870,7 +854,7 @@ function QueryBox({ text, setText, schema, onRun, tools, actions, runErrors, set
           /* @__PURE__ */ jsx2("span", { className: "flex-1" }),
           it.count !== void 0 && /* @__PURE__ */ jsx2("span", { className: "w-9 shrink-0 text-right text-interface-labels-xs-normal text-text-default-subtle", children: kfmt(it.count) })
         ] }),
-        (it.kind === "op" || it.kind === "kw" || it.kind === "fn") && /* @__PURE__ */ jsxs2(Fragment2, { children: [
+        (it.kind === "op" || it.kind === "kw") && /* @__PURE__ */ jsxs2(Fragment2, { children: [
           /* @__PURE__ */ jsx2("span", { className: `shrink-0 font-mono text-code-editor-small font-semibold ${it.num ? ROLE.num : it.str ? ROLE.str : "text-text-color-purple"}`, children: it.label }),
           it.sub && /* @__PURE__ */ jsx2("span", { className: "ml-auto min-w-0 truncate text-interface-body-s-normal text-text-default-subdued", children: it.sub })
         ] }),

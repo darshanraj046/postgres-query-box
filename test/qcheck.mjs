@@ -39,7 +39,6 @@ const good = [
   'metadata.additionalMetadata.service.category == "MICROSERVICE" AND metadata.additionalMetadata.host.ip IP IN_RANGE "10.10.0.0/16"',
   'metadata.additionalMetadata.service\\.name == "checkout-app"',
   'metadata.monetization.enabled == false AND metadata.additionalMetadata.host\\.ip IP IN_RANGE "10.10.0.0/16"',
-  `COUNT() > 50 WITHIN 5m GROUP BY ${X}`,
   `${X} IP IN_RANGE "10.0.0.0/8"`,
   `${X} IP NOT_IN_RANGE ["10.0.0.0/8", "192.168.0.0/16"]`,
   `${X} IP IN_RANGE "10.0.0.1-10.200.0.50"`,
@@ -47,7 +46,7 @@ const good = [
   '((metadata.responseTimestamp - metadata.requestTimestamp) > 2000 OR data.response.statusCode >= 500)\nAND (data.request.headerParams.x-apikey PRESENT OR data.request.headerParams.cookie PRESENT)\nAND data.response.statusCode NONEOF ["401", "403"]\nAND data.request.path NOT CONTAINS "/public"',
   'data.response.statusCode BETWEEN 400 AND 499 AND data.response.statusCode NONEOF ["401", "404"] AND data.request.verb != "GET"',
   `data.request.port > 8000 AND (${X} IP IN_RANGE "203.0.113.0/24" OR (metadata.responseTimestamp - metadata.requestTimestamp) > 5000)`,
-  `(data.request.verb == "DELETE" OR (data.request.verb == "POST" AND data.request.path ~ "/holds$")) AND ${X} IP NOT_IN_RANGE ["10.0.0.0/8", "192.168.0.0/16"] AND (metadata.responseTimestamp - metadata.requestTimestamp) > 1500 AND COUNT() >= 10 WITHIN 15m GROUP BY ${X}`,
+  `(data.request.verb == "DELETE" OR (data.request.verb == "POST" AND data.request.path ~ "/holds$")) AND ${X} IP NOT_IN_RANGE ["10.0.0.0/8", "192.168.0.0/16"] AND (metadata.responseTimestamp - metadata.requestTimestamp) > 1500`,
   `(data.request.verb == "POST" OR data.request.verb ANYONE ["PUT", "PATCH", "DELETE"])
 AND data.request.verb NONEOF ["GET", "HEAD", "OPTIONS"]
 AND data.request.path ~ "^/api/v1/devices/.*"
@@ -65,8 +64,7 @@ AND data.request.headerParams.jsessionid ABSENT
 AND ((metadata.responseTimestamp - metadata.requestTimestamp) > 2000 AND (metadata.responseTimestamp - metadata.requestTimestamp) <= 30000)
 AND NOT ((metadata.responseTimestamp - metadata.requestTimestamp) < 100 OR (metadata.responseTimestamp - metadata.requestTimestamp) >= 60000)
 AND (${X} IP IN_RANGE "203.0.113.0/24"
-  OR ${X} IP NOT_IN_RANGE "10.0.0.0/8")
-AND COUNT() > 50 WITHIN 5m GROUP BY ${X}`,
+  OR ${X} IP NOT_IN_RANGE "10.0.0.0/8")`,
   ...SAVED.map((s) => s.query)
 ]
 
@@ -81,7 +79,7 @@ for (const q of good) {
   const f2 = format(b.ast)
   if (f1 !== f2 || b.errors.length) fail('unstable', q, f1, f2)
   const r = evaluate(a.ast, rows)
-  console.log(String(r.rows.length).padStart(5), r.count ? `groups ${r.count.groups.length}/${r.count.buckets}` : '', '|', format(a.ast, (p) => (p === '@latency' ? 'latency' : schema.short[p] || p)).replace(/\n/g, ' '))
+  console.log(String(r.rows.length).padStart(5), '', '|', format(a.ast, (p) => (p === '@latency' ? 'latency' : schema.short[p] || p)).replace(/\n/g, ' '))
 }
 
 const neg = [
@@ -98,10 +96,6 @@ const neg = [
   [`${X} IP IN_RANGE "10.0.0.1-10.0.0.2-10.0.0.3"`, 'not a valid CIDR'],
   [`${X} IP IN_RANGE "::01.2.3.4"`, 'not a valid CIDR'],
   ['LATENCY == 5', 'Latency takes'],
-  ['COUNT() > 5 AND data.request.verb == "GET"', 'goes last'],
-  ['data.request.verb == "GET" AND COUNT() > 5 AND COUNT() > 2', 'Only one'],
-  ['data.request.verb == "GET" OR COUNT() > 5', 'goes last'],
-  ['COUNT() > 5 WITHIN 5', 'Add a unit'],
   ['data.request.path ~ "("', 'Invalid regex'],
   [String.raw`data.request.path ~ "\\bapi\\B"`, 'reads \\b as a backspace', String.raw`"\yapi\Y"`],
   [String.raw`data.request.path ~ "(?<v>\\d+)"`, 'named groups'],
@@ -140,8 +134,7 @@ const sem = [
   ['data.request.queryParams.endTime != "1"', (r) => r.every((x) => x.data.request.queryParams.endTime)],
   ['NOT data.request.queryParams.endTime == "1"', (r) => r.every((x) => x.data.request.queryParams.endTime)],
   ['data.request.queryParams.endTime NONEOF ["1"]', (r) => r.every((x) => x.data.request.queryParams.endTime)],
-  ['data.response.statusCode == 200', (r) => r.length === 0],
-  ['data.response.statusCode == "401" AND COUNT() > 20 WITHIN 5m GROUP BY ' + X, (r) => r.length >= 21 && r.every((x) => x.data.request.headerParams['x-envoy-external-address'] === '34.217.218.221')]
+  ['data.response.statusCode == 200', (r) => r.length === 0]
 ]
 for (const [q, ok] of sem) {
   const a = parse(q, schema)
@@ -162,10 +155,6 @@ const ctx = [
   ['data.response.statusCode >= 500 ', 'kw', 'AND'],
   ['(data.request.verb == "GET" ', 'kw', ')'],
   ['data.request.verb == "GET" AND ', 'fields'],
-  ['data.request.verb == "GET" AND COUNT() ', 'kw', '>'],
-  ['data.request.verb == "GET" AND COUNT() > 5 ', 'kw', 'WITHIN'],
-  ['data.request.verb == "GET" AND COUNT() > 5 WITHIN ', 'kw', '5m'],
-  ['data.request.verb == "GET" AND COUNT() > 5 WITHIN 5m GROUP BY ', 'fields'],
   ['(metadata.responseTimestamp - metadata.requestTimestamp) ', 'ops'],
   [X + ' IP ', 'kw', 'IN_RANGE'],
   ['metadata.security == ', 'values'],
@@ -243,14 +232,12 @@ for (const q of ['data.response.statusCode ~ "^5\\d\\d$"', 'data.request.path ~ 
 
 {
   const c = ctxAt('')
-  expect(subOf(c, 'COUNT()') === 'number of matching calls, e.g. COUNT() > 50 WITHIN 5m', 'COUNT() hint', subOf(c, 'COUNT()'))
   expect(subOf(c, 'NOT') === 'exclude matching calls, e.g. NOT data.request.verb == "GET"', 'NOT hint', subOf(c, 'NOT'))
   expect(subOf(c, '(') === 'start a group', '( hint')
   const j = ctxAt('data.request.verb == "GET" ')
   expect(subOf(j, 'AND') === 'both must match, e.g. AND data.response.statusCode >= 500', 'AND hint', subOf(j, 'AND'))
   expect(subOf(j, 'OR') === 'either can match, e.g. OR data.request.verb == "PUT"', 'OR hint')
   expect(subOf(j, 'AND NOT') === 'exclude matching calls, e.g. AND NOT data.request.path CONTAINS "/health"', 'AND NOT hint')
-  expect(subOf(j, 'AND COUNT()') === 'number of matching calls, e.g. AND COUNT() > 50 WITHIN 5m', 'AND COUNT() hint')
   expect(subOf(ctxAt('(data.request.verb == "GET" '), ')') === 'close the group, e.g. (A OR B) AND C', ') hint')
   expect(!JSON.stringify([c, j]).includes('goes last') && !JSON.stringify(c).includes('what follows'), 'old hint wording gone')
 }
@@ -366,12 +353,10 @@ for (const q of ['data.response.statusCode ~ "^5\\d\\d$"', 'data.request.path ~ 
   expect(fx('data.request.verb ANYONE "GET", "PUT"]')[0] === '[', 'add [ fix')
   expect(parse('data.request.port ANYONE 1', schema).errors[0]?.msg === 'Expected a list like [1, 2]', 'list example follows type')
   expect(fx('data.response.statusCode ~* "^5"')[0] === '~' && fx('data.response.statusCode !~* "^5"')[0] === '!~', 'case-insensitive regex on status code offers ~')
-  expect(JSON.stringify(fx('data.request.verb == "GET" AND COUNT() > 5 WITHIN 5')) === '["5s","5m","5h","5d"]', 'WITHIN unit fixes')
-  expect(fx('data.request.verb == "GET" AND COUNT() 5')[0] === '>', 'COUNT add operator fix')
   const lq = 'data.request.verb ANYONE ["POST, "PUT"]'
   const le = parse(lq, schema).errors[0]
   expect(le?.msg === 'Missing " after POST' && !parse(fixed(lq, le), schema).errors.length, 'missing quote inside a list', le?.msg)
-  for (const q of ['metadata.security == abc', 'data.request.port BETWEEN 9 AND 1', 'data.request.port BETWEEN 1 5', 'data.request.verb ANYONE "GET", "PUT"]', 'data.response.statusCode ~* "^5"', 'data.request.verb == "GET" AND COUNT() > 5 WITHIN 5', 'data.request.verb == "GET" AND COUNT() 5']) {
+  for (const q of ['metadata.security == abc', 'data.request.port BETWEEN 9 AND 1', 'data.request.port BETWEEN 1 5', 'data.request.verb ANYONE "GET", "PUT"]', 'data.response.statusCode ~* "^5"']) {
     const e = parse(q, schema).errors[0]
     expect(!parse(fixed(q, e), schema).errors.length, 'new fix makes query valid', q, fixed(q, e))
   }
