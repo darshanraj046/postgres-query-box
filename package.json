@@ -1,6 +1,6 @@
 {
   "name": "postgres-query-box",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A React query box for API transaction logs: field and value suggestions, inline errors with fixes, an Advanced filter builder and saved queries.",
   "license": "MIT",
   "author": "Darshan R",

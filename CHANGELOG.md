@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- README: install with `npm install postgres-query-box`. It said the package was not on npm.
+
 ## 0.2.0
 
 - Removed `COUNT()`, with its `WITHIN` and `GROUP BY`. The query language, suggestions and Advanced filter no longer have it. `toSql` returns `{ where }` only, and `evaluate` returns `{ rows }` only.

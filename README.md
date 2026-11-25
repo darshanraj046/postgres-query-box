@@ -6,10 +6,8 @@ The box only handles the query. Your app keeps the results table, the API calls 
 
 ## Install
 
-The package is not on npm yet. Install it from the folder or from your git host:
-
 ```
-npm install ../postgres-query-box
+npm install postgres-query-box
 ```
 
 It needs React 18 or newer.
